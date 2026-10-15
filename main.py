@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import re
 import asyncio
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+# AstrBot 4.28 may import a plugin through its dotted module path without
+# adding the plugin directory itself to sys.path. Make sibling plugin modules
+# importable in both that environment and direct local execution.
+_PLUGIN_DIR = Path(__file__).resolve().parent
+if str(_PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_DIR))
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
