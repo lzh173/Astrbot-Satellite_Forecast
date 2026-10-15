@@ -1,0 +1,34 @@
+{
+    "sync_on_start": {
+      "type": "bool",
+      "description": "插件启动时立即同步数据",
+      "default": true
+    },
+    "sync_interval_hours": {
+      "type": "float",
+      "description": "自动同步间隔（小时）",
+      "default": 24,
+      "slider": {"min": 1, "max": 168, "step": 1}
+    },
+    "data_dir": {
+      "type": "string",
+      "description": "插件数据目录",
+      "default": "data/plugin_data/astrbot_plugin_satellite_forecast"
+    },
+    "celestrak": {
+      "type": "object",
+      "description": "CelesTrak 或兼容格式的数据源",
+      "items": {
+        "endpoint": {"type": "string", "default": "https://celestrak.org/NORAD/elements/gp.php"},
+        "group": {"type": "string", "default": "active"},
+        "format": {"type": "string", "options": ["tle", "json"], "default": "tle"}
+      }
+    },
+    "satnogs": {
+      "type": "object",
+      "description": "SatNOGS 或兼容格式的转发器数据源",
+      "items": {
+        "endpoint": {"type": "string", "default": "https://db.satnogs.org/api/transmitters/"}
+      }
+    }
+}
