@@ -35,6 +35,15 @@ from satellite_forecast.storage import Storage
 PLUGIN_NAME = "astrbot_plugin_satellite_forecast"
 
 
+def _q_argument(message: str | None) -> str:
+    """Extract arguments whether AstrBot kept the slash and command name."""
+    text = (message or "").strip()
+    # Depending on the adapter/dispatcher, message_str can be `/q 1`, `q 1`,
+    # or just `1` after the command filter has consumed the command token.
+    text = re.sub(r"^/?q(?:\s+|$)", "", text, count=1, flags=re.IGNORECASE)
+    return text.strip()
+
+
 @register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "0.1.0")
 class SatelliteForecastPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
@@ -194,7 +203,7 @@ class SatelliteForecastPlugin(Star):
     @filter.command("q")
     async def q(self, event: AstrMessageEvent):
         """卫星预报菜单入口。"""
-        argument = re.sub(r"^/q\b", "", event.message_str.strip(), flags=re.I).strip()
+        argument = _q_argument(event.message_str)
         if not argument:
             yield event.plain_result(self._menu()); return
         if argument == "0":
