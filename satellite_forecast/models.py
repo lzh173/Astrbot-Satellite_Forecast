@@ -58,7 +58,7 @@ class UserSettings:
     reminder_count: int = 1
     notifications_enabled: bool = True
     tle_storage_path: str | None = None
-    timezone: str = "UTC"
+    timezone: str = "Asia/Shanghai"
     updated_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:

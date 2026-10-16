@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover - older AstrBot versions
     AstrBotConfig = dict
 
 from satellite_forecast.geocoding import Location, resolve_location
-from satellite_forecast.models import FollowedSatellite, SatelliteRecord as StoredSatellite, SatelliteTransmitter, UserLocation, UserSettings
+from satellite_forecast.models import FollowedSatellite, PendingInteraction, SatelliteRecord as StoredSatellite, SatelliteTransmitter, UserLocation, UserSettings, utc_now
 from satellite_forecast.prediction import predict_passes
 from satellite_forecast.satellite_search import SatelliteSearchIndex
 from satellite_forecast.sources import CelesTrakSource, SatNOGSTransponderSource, SatelliteRecord as SourceSatellite
@@ -197,6 +197,42 @@ class SatelliteForecastPlugin(Star):
                 f"{i}. {m.satellite.name}（NORAD {m.satellite.norad_id}）" for i, m in enumerate(matches[:5], 1))
         return matches[0].satellite, None
 
+    def _save_selection(self, event: AstrMessageEvent, action: str, matches) -> None:
+        """Keep a short-lived candidate list so the next message can be 1/2/3."""
+        self.storage.set_pending_interaction(PendingInteraction(
+            self._user_key(event),
+            "choose_satellite",
+            {"action": action, "norad_ids": [str(item.satellite.norad_id) for item in matches[:10]]},
+            expires_at=utc_now() + timedelta(minutes=10),
+        ))
+
+    async def _consume_selection(self, event: AstrMessageEvent, argument: str) -> str | None:
+        if not argument.isdigit():
+            return None
+        pending = self.storage.get_pending_interaction(self._user_key(event), "choose_satellite")
+        if pending is None:
+            return None
+        index = int(argument) - 1
+        candidates = pending.payload.get("norad_ids", [])
+        if index < 0 or index >= len(candidates):
+            return f"选择无效，请回复 1 到 {len(candidates)}。"
+        item = self.storage.get_satellite(str(candidates[index]))
+        self.storage.clear_pending_interaction(self._user_key(event), "choose_satellite")
+        if item is None:
+            return "候选卫星已不在本地目录，请重新搜索。"
+        action = pending.payload.get("action")
+        if action == "add":
+            self.storage.add_followed_satellite(FollowedSatellite(
+                self._user_key(event), item.norad_id, item.name, item.source
+            ))
+            return f"已关注：{item.name}（NORAD {item.norad_id}）"
+        if action == "remove":
+            removed = self.storage.remove_followed_satellite(self._user_key(event), item.norad_id)
+            return "已从关注列表移除。" if removed else "这颗卫星不在你的关注列表中。"
+        if action == "search":
+            return f"已选择：{item.name}（NORAD {item.norad_id}）。可发送 /q add {item.name} 关注，或 /q 2 {item.name} 计算过境。"
+        return f"已选择：{item.name}（NORAD {item.norad_id}）。"
+
     async def _user_location(self, event: AstrMessageEvent, query: str | None = None) -> Location | None:
         key = self._user_key(event)
         if query is not None:
@@ -253,6 +289,9 @@ class SatelliteForecastPlugin(Star):
         self._debug("command received: argument=%s", argument[:120] if argument else "<menu>")
         if not argument:
             yield event.plain_result(self._menu()); return
+        selection = await self._consume_selection(event, argument)
+        if selection is not None:
+            yield event.plain_result(selection); return
         if argument == "0":
             yield event.plain_result("收工。\n"); return
         if argument == "1":
@@ -269,14 +308,29 @@ class SatelliteForecastPlugin(Star):
         if argument == "6":
             self._debug("command branch: manual sync")
             yield event.plain_result(await self._sync()); return
+        if argument == "add" or argument == "remove" or argument == "del":
+            yield event.plain_result("用法：/q add 卫星名称，或 /q del 卫星名称。"); return
         if argument.startswith("add "):
-            satellite, error = self._find(argument[4:].strip())
+            query = argument[4:].strip()
+            matches = self.index.search(query, 10)
+            satellite, error = self._find(query)
+            if len(matches) > 1 and matches[0].score < 100 and matches[1].score >= matches[0].score - 3:
+                self._save_selection(event, "add", matches)
+                yield event.plain_result("找到多个候选，请回复序号：\n" + "\n".join(
+                    f"{i}. {m.satellite.name}（NORAD {m.satellite.norad_id}）" for i, m in enumerate(matches[:5], 1)))
+                return
             if error:
                 yield event.plain_result(error); return
             self.storage.add_followed_satellite(FollowedSatellite(self._user_key(event), str(satellite.norad_id), satellite.name, satellite.source or ""))
             yield event.plain_result(f"已关注：{satellite.name}（NORAD {satellite.norad_id}）"); return
         if argument.startswith("del ") or argument.startswith("remove "):
             query = argument.split(" ", 1)[1].strip()
+            matches = self.index.search(query, 10)
+            if len(matches) > 1 and matches[0].score < 100 and matches[1].score >= matches[0].score - 3:
+                self._save_selection(event, "remove", matches)
+                yield event.plain_result("找到多个候选，请回复序号：\n" + "\n".join(
+                    f"{i}. {m.satellite.name}（NORAD {m.satellite.norad_id}）" for i, m in enumerate(matches[:5], 1)))
+                return
             satellite, error = self._find(query)
             if error:
                 yield event.plain_result(error); return
@@ -304,15 +358,22 @@ class SatelliteForecastPlugin(Star):
                 yield event.plain_result(f"设置无效：{exc}"); return
         if argument.startswith("pass "):
             yield event.plain_result(await self._passes(event, argument[5:].strip())); return
+        if argument == "5":
+            yield event.plain_result("用法：/q 5 卫星名称，例如 /q 5 metop。")
+            return
         if argument.startswith("5 "):
             results = self.index.search(argument[2:].strip(), 10)
-            yield event.plain_result("没有找到匹配的卫星。" if not results else
+            if not results:
+                yield event.plain_result("没有找到匹配的卫星。")
+                return
+            self._save_selection(event, "search", results)
+            yield event.plain_result("搜索结果（回复序号可选择）：\n" +
                 "\n".join(f"{i}. {x.satellite.name}（NORAD {x.satellite.norad_id}）" for i, x in enumerate(results, 1)))
             return
         if argument.startswith("2 "):
             yield event.plain_result(await self._passes(event, argument[2:].strip()))
             return
-        if argument in {"2", "4", "5"}:
+        if argument in {"2", "4"}:
             followed = self.storage.list_followed_satellites(self._user_key(event))
             if argument == "4":
                 location = self.storage.get_location(self._user_key(event))

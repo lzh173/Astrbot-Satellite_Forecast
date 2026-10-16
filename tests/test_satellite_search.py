@@ -40,3 +40,13 @@ def test_search_can_include_transmitter_descriptions() -> None:
         )
     ])
     assert index.search("APT 137")[0].satellite.norad_id == "40069"
+
+
+def test_search_tolerates_source_model_transponders() -> None:
+    from satellite_forecast.sources import SatelliteRecord as SourceSatellite, Transponder
+
+    index = SatelliteSearchIndex([SourceSatellite(
+        name="METOP-C", norad_id=40069, source="celestrak",
+        transponders=[Transponder(description="APT 137 MHz")],
+    )])
+    assert index.search("APT 137")[0].satellite.name == "METOP-C"

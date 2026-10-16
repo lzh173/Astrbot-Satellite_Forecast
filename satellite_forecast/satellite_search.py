@@ -11,10 +11,10 @@ from typing import Iterable
 from .models import SatelliteRecord
 
 
-def normalize_query(value: str) -> str:
+def normalize_query(value: object) -> str:
     """Normalize names such as ``METOP-C`` and ``metop c`` consistently."""
 
-    value = unicodedata.normalize("NFKC", value).casefold()
+    value = unicodedata.normalize("NFKC", str(value)).casefold()
     return re.sub(r"[^\w]+", "", value, flags=re.UNICODE)
 
 
@@ -57,10 +57,15 @@ class SatelliteSearchIndex:
         for satellite in self._satellites.values():
             candidates = [(satellite.norad_id, "norad_id"), (satellite.name, "name")]
             candidates.extend((alias, "alias") for alias in satellite.aliases)
+            # ``transmitters`` is the storage-model name. Accept the source
+            # model's legacy ``transponders`` name too during rolling updates.
+            transmitters = getattr(satellite, "transmitters", None)
+            if transmitters is None:
+                transmitters = getattr(satellite, "transponders", ())
             candidates.extend(
                 (transmitter.description, "transmitter")
-                for transmitter in satellite.transmitters
-                if transmitter.description
+                for transmitter in transmitters
+                if getattr(transmitter, "description", None)
             )
             best_score = 0.0
             best_label = ""

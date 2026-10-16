@@ -205,6 +205,11 @@ class Storage:
             ).fetchone()
         if row is None:
             return UserSettings(user_id=user_id)
+        # Settings created before the local-time default was introduced have
+        # UTC persisted even though the user never selected a timezone.
+        timezone_name = row["timezone"] or "Asia/Shanghai"
+        if timezone_name == "UTC":
+            timezone_name = "Asia/Shanghai"
         return UserSettings(
             user_id=row["user_id"],
             min_elevation_deg=row["min_elevation_deg"],
@@ -212,7 +217,7 @@ class Storage:
             reminder_count=row["reminder_count"],
             notifications_enabled=bool(row["notifications_enabled"]),
             tle_storage_path=row["tle_storage_path"],
-            timezone=row["timezone"],
+            timezone=timezone_name,
             updated_at=_text_to_datetime(row["updated_at"]),
         )
 

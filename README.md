@@ -34,6 +34,8 @@ Satellite search accepts names, aliases, descriptions, international designators
 
 `/q 2` lists followed satellites; `/q 2 metop-c` calculates visible passes directly. `/q 4` shows the bound location, followed satellites, and a next-pass summary. `/q 5 fy2g` performs a fuzzy catalog search.
 
+When a search or `/q add` command returns multiple candidates, reply with its number to select one. `/q 5` without a query shows usage instead of listing followed satellites. Pass times default to `Asia/Shanghai`; an explicitly saved user timezone is respected.
+
 ## LLM tools
 
 The plugin registers tools for resolving a place name or Maidenhead locator, binding and reading the current user's location, fuzzy satellite search, managing followed satellites, and predicting passes using the current user's location.
