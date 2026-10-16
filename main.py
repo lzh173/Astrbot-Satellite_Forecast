@@ -435,7 +435,7 @@ class SatelliteForecastPlugin(Star):
         yield event.plain_result("没有找到对应的菜单操作，请查看下面的选项：\n\n" + self._menu())
 
     @filter.llm_tool(name="resolve_observer_location")
-    async def resolve_observer_location(self, event: AstrMessageEvent, location: str) -> MessageEventResult:
+    async def resolve_observer_location(self, event: AstrMessageEvent, location: str) -> str:
         """将地名或 Maidenhead 网格转换为经纬度。
 
         Args:
@@ -444,13 +444,13 @@ class SatelliteForecastPlugin(Star):
         try:
             self._debug("tool resolve_observer_location: input_length=%d", len(location))
             result = await resolve_location(location)
-            return event.plain_result(f"{result.display_name or location}：纬度 {result.latitude:.6f}，经度 {result.longitude:.6f}")
+            return f"{result.display_name or location}：纬度 {result.latitude:.6f}，经度 {result.longitude:.6f}"
         except Exception as exc:  # noqa: BLE001
             self._debug("tool resolve_observer_location failed: %s", type(exc).__name__)
-            return event.plain_result(f"位置解析失败：{exc}")
+            return f"位置解析失败：{exc}"
 
     @filter.llm_tool(name="set_my_location")
-    async def set_my_location(self, event: AstrMessageEvent, location: str, altitude_m: float = 0) -> MessageEventResult:
+    async def set_my_location(self, event: AstrMessageEvent, location: str, altitude_m: float = 0) -> str:
         """绑定当前用户观测位置。
 
         Args:
@@ -461,27 +461,27 @@ class SatelliteForecastPlugin(Star):
             self._debug("tool set_my_location: input_length=%d altitude=%s", len(location), altitude_m)
             result = await resolve_location(location)
             self.storage.set_location(UserLocation(self._user_key(event), result.latitude, result.longitude, result.display_name or location, altitude_m))
-            return event.plain_result(f"已绑定：{result.display_name or location}（{result.latitude:.5f}, {result.longitude:.5f}）")
+            return f"已绑定：{result.display_name or location}（{result.latitude:.5f}, {result.longitude:.5f}）"
         except Exception as exc:  # noqa: BLE001
             self._debug("tool set_my_location failed: %s", type(exc).__name__)
-            return event.plain_result(f"位置绑定失败：{exc}")
+            return f"位置绑定失败：{exc}"
 
     @filter.llm_tool(name="get_my_location")
-    async def get_my_location(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def get_my_location(self, event: AstrMessageEvent) -> str:
         """查询当前用户绑定的观测位置。"""
         item = self.storage.get_location(self._user_key(event))
         self._debug("tool get_my_location: found=%s", item is not None)
-        return event.plain_result("尚未绑定观测位置。" if item is None else f"{item.name}：{item.latitude:.5f}, {item.longitude:.5f}，海拔 {item.altitude_m:g} 米")
+        return "尚未绑定观测位置。" if item is None else f"{item.name}：{item.latitude:.5f}, {item.longitude:.5f}，海拔 {item.altitude_m:g} 米"
 
     @filter.llm_tool(name="list_my_satellites")
-    async def list_my_satellites(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def list_my_satellites(self, event: AstrMessageEvent) -> str:
         """列出当前用户关注的卫星。"""
         items = self.storage.list_followed_satellites(self._user_key(event))
         self._debug("tool list_my_satellites: count=%d", len(items))
-        return event.plain_result("暂无关注卫星。" if not items else "\n".join(f"{i}. {x.display_name}（NORAD {x.norad_id}）" for i, x in enumerate(items, 1)))
+        return "暂无关注卫星。" if not items else "\n".join(f"{i}. {x.display_name}（NORAD {x.norad_id}）" for i, x in enumerate(items, 1))
 
     @filter.llm_tool(name="add_my_satellite")
-    async def add_my_satellite(self, event: AstrMessageEvent, satellite: str) -> MessageEventResult:
+    async def add_my_satellite(self, event: AstrMessageEvent, satellite: str) -> str:
         """按名称、缩写或 NORAD ID 关注卫星。
 
         Args:
@@ -490,12 +490,12 @@ class SatelliteForecastPlugin(Star):
         self._debug("tool add_my_satellite: query=%s", satellite[:80])
         item, error = self._find(satellite)
         if error:
-            return event.plain_result(error)
+            return error
         self.storage.add_followed_satellite(FollowedSatellite(self._user_key(event), str(item.norad_id), item.name, item.source or ""))
-        return event.plain_result(f"已关注：{item.name}（NORAD {item.norad_id}）")
+        return f"已关注：{item.name}（NORAD {item.norad_id}）"
 
     @filter.llm_tool(name="remove_my_satellite")
-    async def remove_my_satellite(self, event: AstrMessageEvent, satellite: str) -> MessageEventResult:
+    async def remove_my_satellite(self, event: AstrMessageEvent, satellite: str) -> str:
         """从当前用户关注列表移除卫星。
 
         Args:
@@ -504,12 +504,12 @@ class SatelliteForecastPlugin(Star):
         self._debug("tool remove_my_satellite: query=%s", satellite[:80])
         item, error = self._find(satellite)
         if error:
-            return event.plain_result(error)
+            return error
         removed = self.storage.remove_followed_satellite(self._user_key(event), str(item.norad_id))
-        return event.plain_result("已移除。" if removed else "这颗卫星不在你的关注列表中。")
+        return "已移除。" if removed else "这颗卫星不在你的关注列表中。"
 
     @filter.llm_tool(name="search_satellites")
-    async def search_satellites(self, event: AstrMessageEvent, query: str) -> MessageEventResult:
+    async def search_satellites(self, event: AstrMessageEvent, query: str) -> str:
         """按名称、缩写、NORAD ID 或描述模糊搜索卫星。
 
         Args:
@@ -517,11 +517,11 @@ class SatelliteForecastPlugin(Star):
         """
         results = self.index.search(query, 10)
         self._debug("tool search_satellites: query=%s results=%d", query[:80], len(results))
-        return event.plain_result("没有找到匹配的卫星。" if not results else
-                                  "\n".join(f"{i}. {x.satellite.name}（NORAD {x.satellite.norad_id}）" for i, x in enumerate(results, 1)))
+        return "没有找到匹配的卫星。" if not results else \
+            "\n".join(f"{i}. {x.satellite.name}（NORAD {x.satellite.norad_id}）" for i, x in enumerate(results, 1))
 
     @filter.llm_tool(name="predict_my_satellite_passes")
-    async def predict_my_satellite_passes(self, event: AstrMessageEvent, satellite: str, hours: int = 24) -> MessageEventResult:
+    async def predict_my_satellite_passes(self, event: AstrMessageEvent, satellite: str, hours: int = 24) -> str:
         """使用当前用户位置预测卫星过境。
 
         Args:
@@ -530,12 +530,12 @@ class SatelliteForecastPlugin(Star):
         """
         self._debug("tool predict_my_satellite_passes: query=%s hours=%s", satellite[:80], hours)
         if not 1 <= hours <= 168:
-            return event.plain_result("hours 必须在 1 到 168 之间。")
-        return event.plain_result(await self._passes(event, satellite, hours))
+            return "hours 必须在 1 到 168 之间。"
+        return await self._passes(event, satellite, hours)
 
     @filter.llm_tool(name="predict_satellite_passes")
     async def predict_satellite_passes(self, event: AstrMessageEvent, satellite: str, latitude: float,
-                                       longitude: float, altitude_m: float = 0, hours: int = 24) -> MessageEventResult:
+                                       longitude: float, altitude_m: float = 0, hours: int = 24) -> str:
         """根据经纬度预测指定卫星的过境。
 
         Args:
@@ -547,26 +547,26 @@ class SatelliteForecastPlugin(Star):
         """
         self._debug("tool predict_satellite_passes: query=%s lat=%s lon=%s hours=%s", satellite[:80], latitude, longitude, hours)
         if not 1 <= hours <= 168:
-            return event.plain_result("hours 必须在 1 到 168 之间。")
+            return "hours 必须在 1 到 168 之间。"
         try:
             location = Location(latitude, longitude, altitude_m=altitude_m)
         except ValueError as exc:
-            return event.plain_result(f"观测点参数无效：{exc}")
+            return f"观测点参数无效：{exc}"
         item, error = self._find(satellite)
         if error:
-            return event.plain_result(error)
+            return error
         stored = self.storage.get_satellite(str(item.norad_id))
         if stored is None:
-            return event.plain_result("本地没有完整星历，请先更新数据。")
+            return "本地没有完整星历，请先更新数据。"
         settings = self.storage.get_settings(self._user_key(event))
         result = predict_passes(self._to_source(stored), location, duration=timedelta(hours=hours),
                                 minimum_elevation_degrees=settings.min_elevation_deg)
         if not result:
-            return event.plain_result(f"未来 {hours} 小时内没有达到 {settings.min_elevation_deg:g}° 的过境。")
-        return event.plain_result(self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours))
+            return f"未来 {hours} 小时内没有达到 {settings.min_elevation_deg:g}° 的过境。"
+        return self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours)
 
     @filter.llm_tool(name="get_satellite_transmitters")
-    async def get_satellite_transmitters(self, event: AstrMessageEvent, satellite: str) -> MessageEventResult:
+    async def get_satellite_transmitters(self, event: AstrMessageEvent, satellite: str) -> str:
         """查询指定卫星的 SatNOGS 转发器信息。
 
         Args:
@@ -575,13 +575,13 @@ class SatelliteForecastPlugin(Star):
         self._debug("tool get_satellite_transmitters: query=%s", satellite[:80])
         item, error = self._find(satellite)
         if error:
-            return event.plain_result(error)
+            return error
         stored = self.storage.get_satellite(str(item.norad_id))
         if stored is None or not stored.transmitters:
-            return event.plain_result(f"{item.name} 暂无已同步的转发器信息。")
+            return f"{item.name} 暂无已同步的转发器信息。"
         lines = [f"{stored.name}（NORAD {stored.norad_id}）转发器："]
         for index, transmitter in enumerate(stored.transmitters, 1):
             lines.append(f"{index}. {transmitter.description or '未命名'} | 模式 {transmitter.mode or '未知'} | "
                          f"上行 {transmitter.uplink or '未知'} | 下行 {transmitter.downlink or '未知'} | "
                          f"状态 {transmitter.status or '未知'}")
-        return event.plain_result("\n".join(lines))
+        return "\n".join(lines)
