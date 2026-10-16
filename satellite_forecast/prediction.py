@@ -23,6 +23,15 @@ class PassPrediction:
     max_direction: str
 
 
+@dataclass(frozen=True, slots=True)
+class TrackPoint:
+    """A sampled apparent position in the observer's sky."""
+
+    time: datetime
+    elevation_degrees: float
+    azimuth_degrees: float
+
+
 def _utc_datetime(value: Any) -> datetime:
     result = value.utc_datetime()
     return result.replace(tzinfo=timezone.utc) if result.tzinfo is None else result.astimezone(timezone.utc)
@@ -112,3 +121,30 @@ def predict_passes(
         )
         index += 3
     return predictions
+
+
+def sample_pass_track(
+    satellite: SatelliteRecord,
+    location: Location,
+    prediction: PassPrediction,
+    *,
+    samples: int = 48,
+    timescale: Any | None = None,
+) -> list[TrackPoint]:
+    """Sample altitude and azimuth during one complete visible pass."""
+    if samples < 2:
+        raise ValueError("samples must be at least 2")
+    ts = timescale or load.timescale()
+    sat = _make_satellite(satellite, ts)
+    observer = wgs84.latlon(
+        latitude_degrees=location.latitude,
+        longitude_degrees=location.longitude,
+        elevation_m=location.altitude_m,
+    )
+    duration = (prediction.eos - prediction.aos).total_seconds()
+    result: list[TrackPoint] = []
+    for index in range(samples):
+        moment = prediction.aos + timedelta(seconds=duration * index / (samples - 1))
+        altitude, azimuth, _ = (sat - observer).at(ts.from_datetime(moment)).altaz()
+        result.append(TrackPoint(moment, float(altitude.degrees), float(azimuth.degrees % 360.0)))
+    return result

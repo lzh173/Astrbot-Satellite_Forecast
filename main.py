@@ -29,7 +29,8 @@ except ImportError:  # pragma: no cover - older AstrBot versions
 
 from satellite_forecast.geocoding import Location, resolve_location
 from satellite_forecast.models import FollowedSatellite, PendingInteraction, SatelliteRecord as StoredSatellite, SatelliteTransmitter, UserLocation, UserSettings, utc_now
-from satellite_forecast.prediction import predict_passes
+from satellite_forecast.prediction import predict_passes, sample_pass_track
+from satellite_forecast.sky_chart import render_sky_chart
 from satellite_forecast.satellite_search import SatelliteSearchIndex
 from satellite_forecast.sources import CelesTrakSource, SatNOGSTransponderSource, SatelliteRecord as SourceSatellite
 from satellite_forecast.storage import Storage
@@ -300,6 +301,36 @@ class SatelliteForecastPlugin(Star):
             return f"未来 {hours} 小时内没有达到 {settings.min_elevation_deg:g}° 的过境。"
         return self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours)
 
+    async def _passes_with_chart(self, event: AstrMessageEvent, query: str, hours: int = 24):
+        """Return the text forecast and a best-effort chart for command replies."""
+        text = await self._passes(event, query, hours)
+        if text.startswith(("没有找到", "还没有绑定", "本地没有", "未来 ", "更新")):
+            return text, None
+        try:
+            satellite, error = self._find(query)
+            location = await self._user_location(event)
+            stored = self.storage.get_satellite(str(satellite.norad_id)) if satellite and location else None
+            settings = self.storage.get_settings(self._user_key(event)) if location else None
+            if not satellite or not location or not stored or not settings:
+                return text, None
+            passes = predict_passes(self._to_source(stored), location, duration=timedelta(hours=hours),
+                                    minimum_elevation_degrees=settings.min_elevation_deg)
+            if not passes:
+                return text, None
+            track = sample_pass_track(self._to_source(stored), location, passes[0])
+            return text, render_sky_chart(stored.name, track, timezone_label=self._timezone_label(settings.timezone))
+        except Exception as exc:  # noqa: BLE001
+            self._debug("sky chart generation failed: %s", type(exc).__name__)
+            return text, None
+
+    @staticmethod
+    def _image_result(path):
+        try:
+            from astrbot.api.message_components import Image
+            return Image.fromFileSystem(str(path))
+        except (ImportError, AttributeError):
+            return None
+
     def _menu(self) -> str:
         command = self._command()
         return ("卫星过境助手\n"
@@ -310,7 +341,6 @@ class SatelliteForecastPlugin(Star):
                 "4. 查看我的状态\n"
                 "5. 搜索卫星\n"
                 "6. 更新星历数据\n"
-                "0. 关闭菜单\n\n"
                 f"常用命令：{command} 1 厦门｜{command} add METOP-C｜{command} 2 METOP-C\n"
                 "也可以直接问：Metop-C 明天在 OL63 有哪些过境？")
 
@@ -338,8 +368,6 @@ class SatelliteForecastPlugin(Star):
         selection = await self._consume_selection(event, argument)
         if selection is not None:
             yield event.plain_result(selection); return
-        if argument == "0":
-            yield event.plain_result("已关闭卫星过境助手。需要时再次发送菜单命令即可。\n"); return
         if argument == "1":
             saved = self.storage.get_location(self._user_key(event))
             yield event.plain_result(
@@ -411,7 +439,12 @@ class SatelliteForecastPlugin(Star):
                 self._debug("settings command failed: %s", type(exc).__name__)
                 yield event.plain_result("设置无效，请填写数字。\n例如：" + f"{self._command()} set elevation 10"); return
         if argument.startswith("pass "):
-            yield event.plain_result(await self._passes(event, argument[5:].strip())); return
+            text, chart = await self._passes_with_chart(event, argument[5:].strip())
+            yield event.plain_result(text)
+            image = self._image_result(chart) if chart else None
+            if image is not None:
+                yield event.chain_result([image])
+            return
         if argument == "5":
             yield event.plain_result(f"请输入卫星名称、缩写或 NORAD 编号。\n例如：{self._command()} 5 metop")
             return
@@ -425,7 +458,11 @@ class SatelliteForecastPlugin(Star):
                 "\n".join(f"{i}. {x.satellite.name}（NORAD {x.satellite.norad_id}）" for i, x in enumerate(results, 1)))
             return
         if argument.startswith("2 "):
-            yield event.plain_result(await self._passes(event, argument[2:].strip()))
+            text, chart = await self._passes_with_chart(event, argument[2:].strip())
+            yield event.plain_result(text)
+            image = self._image_result(chart) if chart else None
+            if image is not None:
+                yield event.chain_result([image])
             return
         if argument in {"2", "4"}:
             followed = self.storage.list_followed_satellites(self._user_key(event))

@@ -7,7 +7,7 @@
 - 远端：`git@github.com:lzh173/Astrbot-Satellite_Forecast.git`
 - 主分支：`master`
 - 最新远端提交：`f5435c5`，提交信息为“支持源文件保存与离线合成数据库”
-- 当前插件版本：`v0.1.1-bugfix13`
+- 当前插件版本：`v0.1.1-bugfix16`
 - GPG 签名 key：`C8922CEE7E3B6239E76380AC444F3D4763360C7B`
 - Python 测试当前结果：`37 passed`
 
@@ -18,6 +18,7 @@
 - `satellite_forecast/storage.py`：SQLite 持久化。
 - `satellite_forecast/sources.py`：CelesTrak、SatNOGS 和兼容自定义源的下载与解析。
 - `satellite_forecast/prediction.py`：基于 Skyfield 的过境计算。
+- `satellite_forecast/sky_chart.py`：使用 Pillow 绘制天空轨迹图。
 - `satellite_forecast/geocoding.py`：地名和梅登海德网格解析。
 - `satellite_forecast/maidenhead.py`：梅登海德网格转换。
 - `satellite_forecast/time_utils.py`：UTC、北京时间和用户时区显示。

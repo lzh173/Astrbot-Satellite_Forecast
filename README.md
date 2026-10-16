@@ -38,6 +38,8 @@ Satellite search accepts names, aliases, descriptions, international designators
 
 When a search or `/sat add` command returns multiple candidates, reply with its number to select one. `/sat 5` without a query shows usage instead of listing followed satellites. Pass times default to `Asia/Shanghai`; an explicitly saved user timezone is respected.
 
+查询过境时，插件会先返回文字预报，并附上一张天空轨迹图。图中以天顶为中心、地平线为外圈，绿色线表示卫星经过天空的路径，黄色点为进入可见范围，红色点为离开可见范围。一次查询最多绘制预测范围内第一段可见过境的轨迹。
+
 ## LLM tools
 
 The plugin registers tools for resolving a place name or Maidenhead locator, binding and reading the current user's location, fuzzy satellite search, managing followed satellites, and predicting passes using the current user's location.
