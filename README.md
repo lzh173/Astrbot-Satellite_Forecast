@@ -42,7 +42,7 @@ The `/q ai ...` command sends a prompt to the current AstrBot provider with the 
 
 ## Configuration
 
-The included `_conf_schema.json` exposes startup synchronization, the daily synchronization interval, a data directory, and CelesTrak/SatNOGS-compatible endpoints. CelesTrak supports `tle` and `json` formats. A compatible mirror can be supplied by changing the endpoint while keeping the corresponding format. CelesTrak requests include a descriptive `User-Agent`; extra compatible-source headers can be configured under `celestrak.headers`.
+The included `_conf_schema.json` exposes startup synchronization, the daily synchronization interval, a data directory, and CelesTrak/SatNOGS-compatible endpoints. CelesTrak supports `tle` and `json` formats. A compatible mirror can be supplied by changing the endpoint while keeping the corresponding format. CelesTrak requests include a descriptive `User-Agent`. The Python source adapter also accepts an optional `headers` mapping for programmatic/custom integrations; it is intentionally not exposed as an arbitrary object in the AstrBot 4.28 schema because that version requires every object to declare fixed `items`.
 
 `debug_logging` is disabled by default. Enable it in the plugin configuration when diagnosing synchronization, command parsing, fuzzy search, location resolution, pass prediction, or LLM tool calls. The detailed logs intentionally record lengths, counts, identifiers, and sanitized endpoint paths instead of complete prompts, credentials, or exact personal coordinates.
 

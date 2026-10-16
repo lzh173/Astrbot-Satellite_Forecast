@@ -26,8 +26,7 @@
       "items": {
         "endpoint": {"type": "string", "default": "https://celestrak.org/NORAD/elements/gp.php"},
         "group": {"type": "string", "default": "active"},
-        "format": {"type": "string", "options": ["tle", "json"], "default": "tle"},
-        "headers": {"type": "object", "description": "兼容源所需的额外 HTTP 请求头（不要填写密钥）", "default": {}}
+        "format": {"type": "string", "options": ["tle", "json"], "default": "tle"}
       }
     },
     "satnogs": {
