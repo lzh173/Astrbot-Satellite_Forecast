@@ -322,9 +322,18 @@ class SatelliteForecastPlugin(Star):
             if not passes:
                 return text, None
             track = sample_pass_track(self._to_source(stored), location, passes[0])
-            return text, render_sky_chart(stored.name, track, timezone_label=self._timezone_label(settings.timezone))
+            chart_dir = Path(self.config.get("data_dir", "data/plugin_data/astrbot_plugin_satellite_forecast")) / "charts"
+            chart = render_sky_chart(
+                stored.name,
+                track,
+                timezone_label=self._timezone_label(settings.timezone),
+                output_dir=chart_dir,
+            )
+            self._debug("sky chart generated: path=%s size=%d", chart, chart.stat().st_size)
+            return text, chart
         except Exception as exc:  # noqa: BLE001
-            self._debug("sky chart generation failed: %s", type(exc).__name__)
+            logger.warning("satellite sky chart unavailable: %s: %s", type(exc).__name__, exc)
+            self._debug("sky chart generation failed", exc_info=True)
             return text, None
 
     def _image_result(self, path):
@@ -332,7 +341,7 @@ class SatelliteForecastPlugin(Star):
             from astrbot.api.message_components import Image
             return Image.fromFileSystem(str(path))
         except Exception as exc:  # noqa: BLE001
-            self._debug("sky chart image component failed: %s", type(exc).__name__)
+            logger.warning("satellite sky chart image component unavailable: %s: %s", type(exc).__name__, exc)
             return None
 
     def _pass_result(self, text: str, chart):
@@ -344,7 +353,7 @@ class SatelliteForecastPlugin(Star):
             from astrbot.api.message_components import Plain
             return [Plain(text), image]
         except Exception as exc:  # noqa: BLE001
-            self._debug("sky chart message chain failed: %s", type(exc).__name__)
+            logger.warning("satellite sky chart message chain unavailable: %s: %s", type(exc).__name__, exc)
             return None
 
     def _menu(self) -> str:
