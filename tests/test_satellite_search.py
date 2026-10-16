@@ -26,3 +26,17 @@ def test_search_is_ranked_and_handles_empty_queries() -> None:
     assert results[0].score >= 90
     assert index.search("   ") == []
     assert index.search("noaa", limit=0) == []
+
+
+def test_search_can_include_transmitter_descriptions() -> None:
+    from satellite_forecast.models import SatelliteTransmitter
+
+    index = SatelliteSearchIndex([
+        SatelliteRecord(
+            "40069",
+            "METOP-C",
+            source="celestrak",
+            transmitters=(SatelliteTransmitter(description="APT 137 MHz"),),
+        )
+    ])
+    assert index.search("APT 137")[0].satellite.norad_id == "40069"

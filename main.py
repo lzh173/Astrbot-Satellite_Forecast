@@ -63,7 +63,9 @@ class SatelliteForecastPlugin(Star):
         self.debug_enabled = bool(self.config.get("debug_logging", False))
         data_dir = self.config.get("data_dir", "data/plugin_data/astrbot_plugin_satellite_forecast")
         self.storage = Storage(Path(data_dir) / "satellite.db")
-        self.index = SatelliteSearchIndex(self._to_source(s) for s in self.storage.list_satellites())
+        # Search indexes the storage model. Convert to the source model only
+        # at the prediction boundary; their transmitter field names differ.
+        self.index = SatelliteSearchIndex(self.storage.list_satellites())
         self._sync_task: asyncio.Task | None = None
         self._debug("constructed: data_dir=%s catalog_size=%d", data_dir, len(self.index.all()))
 
@@ -176,7 +178,7 @@ class SatelliteForecastPlugin(Star):
                 record.transponders = by_norad.get(str(record.norad_id), [])
                 stored.append(self._to_stored(record))
             self.storage.save_satellites(stored)
-            self.index.replace(self._to_source(item) for item in stored)
+            self.index.replace(stored)
             self._debug("sync completed: satellites=%d mapped_norad=%d elapsed=%.2fs", len(stored), len(by_norad), time.monotonic() - started)
             return f"更新完成：CelesTrak {len(stored)} 条。"
         except Exception as exc:  # noqa: BLE001
