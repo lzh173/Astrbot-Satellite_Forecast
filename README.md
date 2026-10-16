@@ -67,6 +67,8 @@ The source parser interfaces are kept separate so a configured mirror can provid
 python scripts/download_ephemeris.py --output satellite.db
 ```
 
+如果失败信息不完整，可增加 `--debug` 查看异常类型和完整 traceback；例如 `ReadTimeout` 表示网络超时，`HTTPStatusError` 后会显示 HTTP 状态码。可以先用 `--skip-transmitters` 判断是 CelesTrak 还是 SatNOGS 无法访问。
+
 脚本默认下载 CelesTrak 的 JSON/OMM 星历并保存 SatNOGS 转发器信息。生成成功后，将 `satellite.db` 复制到插件配置的 `data_dir` 目录中，文件名保持为 `satellite.db`，然后重新加载插件。默认 `data_dir` 为：
 
 ```text

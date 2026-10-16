@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 import httpx
@@ -74,17 +75,27 @@ async def build_database(
     async with httpx.AsyncClient(
         timeout=timeout, headers=headers, follow_redirects=True
     ) as client:
-        records = await CelesTrakSource(
-            endpoint=celestrak_endpoint,
-            group=group,
-            format=data_format,
-            client=client,
-        ).fetch()
+        try:
+            records = await CelesTrakSource(
+                endpoint=celestrak_endpoint,
+                group=group,
+                format=data_format,
+                client=client,
+            ).fetch()
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"CelesTrak download failed: {type(exc).__name__}: {exc!r}"
+            ) from exc
         transmitters = []
         if not skip_transmitters:
-            transmitters = await SatNOGSTransponderSource(
-                satnogs_endpoint, client=client
-            ).fetch_all()
+            try:
+                transmitters = await SatNOGSTransponderSource(
+                    satnogs_endpoint, client=client
+                ).fetch_all()
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"SatNOGS download failed: {type(exc).__name__}: {exc!r}"
+                ) from exc
 
     by_norad = {}
     for item in transmitters:
@@ -124,6 +135,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--satnogs-endpoint", default=DEFAULT_SATNOGS, help="SatNOGS 或兼容源 URL")
     parser.add_argument("--skip-transmitters", action="store_true", help="只下载星历，不下载转发器")
     parser.add_argument("--timeout", type=float, default=60.0, help="单次 HTTP 请求超时秒数")
+    parser.add_argument("--debug", action="store_true", help="失败时输出完整 Python traceback")
     return parser
 
 
@@ -140,7 +152,10 @@ def main() -> int:
             timeout=args.timeout,
         ))
     except Exception as exc:  # noqa: BLE001
-        print(f"生成失败：{exc}", file=sys.stderr)
+        message = f"generation failed [{type(exc).__name__}]: {exc!r}"
+        print(message, file=sys.stderr)
+        if args.debug:
+            traceback.print_exc()
         return 1
     print(f"生成完成：{args.output.resolve()}")
     print(f"星历：{satellites} 条；转发器：{transmitters} 条")
