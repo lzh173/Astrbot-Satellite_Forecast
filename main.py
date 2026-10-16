@@ -323,15 +323,27 @@ class SatelliteForecastPlugin(Star):
                 return text, None
             track = sample_pass_track(self._to_source(stored), location, passes[0])
             chart_dir = Path(self.config.get("data_dir", "data/plugin_data/astrbot_plugin_satellite_forecast")) / "charts"
-            chart = render_sky_chart(
-                stored.name,
-                track,
-                timezone_label=self._timezone_label(settings.timezone),
-                output_dir=chart_dir,
-                norad_id=stored.norad_id,
-                prediction=passes[0],
-                format_time=lambda value: self._time(value, settings.timezone),
-            )
+            chart_kwargs = {
+                "timezone_label": self._timezone_label(settings.timezone),
+                "output_dir": chart_dir,
+                "norad_id": stored.norad_id,
+                "prediction": passes[0],
+                "format_time": lambda value: self._time(value, settings.timezone),
+            }
+            try:
+                chart = render_sky_chart(stored.name, track, **chart_kwargs)
+            except TypeError as exc:
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                # A partially updated deployment may still have the old chart
+                # module. Keep image delivery working until it is synchronized.
+                logger.warning("old sky_chart module detected; sync satellite_forecast/sky_chart.py")
+                chart = render_sky_chart(
+                    stored.name,
+                    track,
+                    timezone_label=chart_kwargs["timezone_label"],
+                    output_dir=chart_dir,
+                )
             self._debug("sky chart generated: path=%s size=%d", chart, chart.stat().st_size)
             return text, chart
         except Exception as exc:  # noqa: BLE001
