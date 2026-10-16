@@ -59,6 +59,29 @@ The included `_conf_schema.json` exposes startup synchronization, the daily sync
 
 The source parser interfaces are kept separate so a configured mirror can provide CelesTrak-compatible or SatNOGS-compatible payloads later.
 
+## Offline database builder
+
+如果运行 AstrBot 的服务器无法访问 CelesTrak 或 SatNOGS，可以在另一台能联网的机器上生成数据库：
+
+```powershell
+python scripts/download_ephemeris.py --output satellite.db
+```
+
+脚本默认下载 CelesTrak 的 JSON/OMM 星历并保存 SatNOGS 转发器信息。生成成功后，将 `satellite.db` 复制到插件配置的 `data_dir` 目录中，文件名保持为 `satellite.db`，然后重新加载插件。默认 `data_dir` 为：
+
+```text
+data/plugin_data/astrbot_plugin_satellite_forecast/satellite.db
+```
+
+也可以只生成星历，或指定 CelesTrak/SatNOGS 兼容镜像：
+
+```powershell
+python scripts/download_ephemeris.py --skip-transmitters
+python scripts/download_ephemeris.py --celestrak-endpoint https://example.invalid/gp.php --satnogs-endpoint https://example.invalid/transmitters/
+```
+
+脚本会先写入临时文件，所有下载和数据库写入成功后才替换目标文件；目标数据库不会因下载失败而被覆盖。
+
 ## Development
 
 ```text
