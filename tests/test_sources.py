@@ -56,16 +56,23 @@ def test_parse_satnogs_transponders_accepts_common_fields():
 
 @pytest.mark.asyncio
 async def test_source_adapters_allow_injected_http_client():
+    seen_headers = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(request.headers)
         if "transmitters" in request.url.path:
             return httpx.Response(200, json=[{"uuid": "t1", "mode": "FM"}])
         return httpx.Response(200, json=[{"OBJECT_NAME": "TEST", "NORAD_CAT_ID": 1}])
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        celestrak = await CelesTrakSource("https://test/gp", client=client).fetch()
+        celestrak = await CelesTrakSource(
+            "https://test/gp", headers={"X-Test-Source": "yes"}, client=client
+        ).fetch()
         transmitters = await SatNOGSTransponderSource("https://test/transmitters", client=client).fetch(1)
     assert celestrak[0].name == "TEST"
     assert transmitters[0].uuid == "t1"
+    assert seen_headers[0]["user-agent"].startswith("AstrBot-Satellite-Forecast/")
+    assert seen_headers[0]["x-test-source"] == "yes"
 
 
 @pytest.mark.asyncio

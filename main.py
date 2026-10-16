@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 import asyncio
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 # AstrBot 4.28 may import a plugin through its dotted module path without
@@ -44,39 +46,64 @@ def _q_argument(message: str | None) -> str:
     return text.strip()
 
 
+def _endpoint_label(endpoint: object) -> str:
+    """Return a log-safe endpoint label without query strings or credentials."""
+    try:
+        parsed = urlsplit(str(endpoint))
+        return parsed.netloc + parsed.path if parsed.netloc else parsed.path
+    except ValueError:
+        return "<invalid-endpoint>"
+
+
 @register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "0.1.0")
 class SatelliteForecastPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config or {}
+        self.debug_enabled = bool(self.config.get("debug_logging", False))
         data_dir = self.config.get("data_dir", "data/plugin_data/astrbot_plugin_satellite_forecast")
         self.storage = Storage(Path(data_dir) / "satellite.db")
         self.index = SatelliteSearchIndex(self._to_source(s) for s in self.storage.list_satellites())
         self._sync_task: asyncio.Task | None = None
+        self._debug("constructed: data_dir=%s catalog_size=%d", data_dir, len(self.index.all()))
+
+    def _debug(self, message: str, *args: object) -> None:
+        """Emit detailed diagnostics only when explicitly enabled in config."""
+        if self.debug_enabled:
+            logger.debug("[satellite-forecast] " + message, *args)
 
     async def initialize(self):
-        logger.info("Satellite Forecast plugin initialized")
+        self._debug("initialize: sync_on_start=%s interval_hours=%s", self.config.get("sync_on_start", True),
+                    self.config.get("sync_interval_hours", 24))
+        logger.info("Satellite Forecast plugin initialized (debug_logging=%s)", self.debug_enabled)
         self._sync_task = asyncio.create_task(self._sync_loop())
 
     async def terminate(self):
+        self._debug("terminate: sync_task_exists=%s", self._sync_task is not None)
         if self._sync_task is not None:
             self._sync_task.cancel()
             await asyncio.gather(self._sync_task, return_exceptions=True)
         self.storage.close()
+        self._debug("terminate: storage closed")
 
     async def _sync_loop(self):
         interval = max(3600, int(self.config.get("sync_interval_hours", 24) * 3600))
         sync_on_start = bool(self.config.get("sync_on_start", True))
+        self._debug("sync loop started: interval_seconds=%d sync_on_start=%s", interval, sync_on_start)
         if sync_on_start:
+            self._debug("sync loop: starting initial sync")
             await self._sync()
         while True:
             await asyncio.sleep(interval)
+            self._debug("sync loop: starting scheduled sync")
             await self._sync()
 
     def _user_key(self, event: AstrMessageEvent) -> str:
         sender = getattr(event.message_obj, "sender", None)
         user_id = getattr(sender, "user_id", None) or getattr(sender, "id", None) or event.get_sender_name()
-        return f"{event.get_platform_name() or 'unknown'}:{user_id}"
+        key = f"{event.get_platform_name() or 'unknown'}:{user_id}"
+        self._debug("resolved user key: platform=%s user_id_present=%s", event.get_platform_name() or "unknown", bool(user_id))
+        return key
 
     @staticmethod
     def _to_source(item: StoredSatellite) -> SourceSatellite:
@@ -117,16 +144,25 @@ class SatelliteForecastPlugin(Star):
                                 tle_line1=item.line1, tle_line2=item.line2, transmitters=transmitters)
 
     async def _sync(self) -> str:
+        started = time.monotonic()
         try:
             source_config = self.config.get("celestrak", {})
+            celestrak_endpoint = source_config.get("endpoint", "https://celestrak.org/NORAD/elements/gp.php")
+            self._debug("sync: celestrak endpoint=%s group=%s format=%s", _endpoint_label(celestrak_endpoint),
+                        source_config.get("group", "active"), source_config.get("format", "tle"))
             records = await CelesTrakSource(
-                endpoint=source_config.get("endpoint", "https://celestrak.org/NORAD/elements/gp.php"),
+                endpoint=celestrak_endpoint,
                 group=source_config.get("group", "active"),
                 format=source_config.get("format", "tle"),
+                headers=source_config.get("headers"),
             ).fetch()
+            self._debug("sync: celestrak parsed records=%d", len(records))
             tx_config = self.config.get("satnogs", {})
-            tx_source = SatNOGSTransponderSource(tx_config.get("endpoint", "https://db.satnogs.org/api/transmitters/"))
+            tx_endpoint = tx_config.get("endpoint", "https://db.satnogs.org/api/transmitters/")
+            self._debug("sync: satnogs endpoint=%s", _endpoint_label(tx_endpoint))
+            tx_source = SatNOGSTransponderSource(tx_endpoint)
             all_transmitters = await tx_source.fetch_all()
+            self._debug("sync: satnogs parsed transmitters=%d", len(all_transmitters))
             by_norad = {}
             for transmitter in all_transmitters:
                 raw = transmitter.raw
@@ -142,13 +178,17 @@ class SatelliteForecastPlugin(Star):
                 stored.append(self._to_stored(record))
             self.storage.save_satellites(stored)
             self.index.replace(self._to_source(item) for item in stored)
+            self._debug("sync completed: satellites=%d mapped_norad=%d elapsed=%.2fs", len(stored), len(by_norad), time.monotonic() - started)
             return f"更新完成：CelesTrak {len(stored)} 条。"
         except Exception as exc:  # noqa: BLE001
             logger.exception("satellite sync failed")
+            self._debug("sync failed after %.2fs: %s", time.monotonic() - started, type(exc).__name__)
             return f"更新失败，已保留旧数据：{exc}"
 
     def _find(self, query: str):
         matches = self.index.search(query, 10)
+        self._debug("search: query_length=%d result_count=%d top=%s", len(query), len(matches),
+                    [(m.satellite.name, round(m.score, 1)) for m in matches[:3]])
         if not matches:
             return None, "没有找到匹配的卫星，可输入名称、缩写或 NORAD 编号。"
         if len(matches) > 1 and matches[0].score < 100 and matches[1].score >= matches[0].score - 3:
@@ -159,11 +199,13 @@ class SatelliteForecastPlugin(Star):
     async def _user_location(self, event: AstrMessageEvent, query: str | None = None) -> Location | None:
         key = self._user_key(event)
         if query is not None:
+            self._debug("location resolve requested: query_length=%d", len(query))
             result = await resolve_location(query)
             self.storage.set_location(UserLocation(key, result.latitude, result.longitude,
                                                    result.display_name or query, result.altitude_m))
             return result
         saved = self.storage.get_location(key)
+        self._debug("location loaded: found=%s", saved is not None)
         return Location(saved.latitude, saved.longitude, saved.name, saved.altitude_m) if saved else None
 
     @staticmethod
@@ -174,6 +216,7 @@ class SatelliteForecastPlugin(Star):
             return value.astimezone(timezone.utc).strftime("%m-%d %H:%M:%S UTC")
 
     async def _passes(self, event: AstrMessageEvent, query: str, hours: int = 24) -> str:
+        self._debug("pass prediction requested: query=%s hours=%d", query[:80], hours)
         satellite, error = self._find(query)
         if error:
             return error
@@ -186,6 +229,8 @@ class SatelliteForecastPlugin(Star):
             return "本地没有完整星历，请先发送 /q 6 更新数据。"
         result = predict_passes(self._to_source(stored), location, duration=timedelta(hours=hours),
                                 minimum_elevation_degrees=settings.min_elevation_deg)
+        self._debug("pass prediction completed: satellite=%s count=%d minimum_elevation=%s", stored.norad_id,
+                    len(result), settings.min_elevation_deg)
         if not result:
             return f"未来 {hours} 小时内没有达到 {settings.min_elevation_deg:g}° 的过境。"
         lines = [f"{stored.name}（NORAD {stored.norad_id}）过境："]
@@ -204,6 +249,7 @@ class SatelliteForecastPlugin(Star):
     async def q(self, event: AstrMessageEvent):
         """卫星预报菜单入口。"""
         argument = _q_argument(event.message_str)
+        self._debug("command received: argument=%s", argument[:120] if argument else "<menu>")
         if not argument:
             yield event.plain_result(self._menu()); return
         if argument == "0":
@@ -220,6 +266,7 @@ class SatelliteForecastPlugin(Star):
                 yield event.plain_result(f"位置解析失败：{exc}")
             return
         if argument == "6":
+            self._debug("command branch: manual sync")
             yield event.plain_result(await self._sync()); return
         if argument.startswith("add "):
             satellite, error = self._find(argument[4:].strip())
@@ -282,8 +329,10 @@ class SatelliteForecastPlugin(Star):
             return
         if argument.lower().startswith("ai "):
             prompt = argument[3:].strip()
+            self._debug("command branch: ai prompt_length=%d", len(prompt))
             try:
                 provider_id = await self.context.get_current_chat_provider_id(umo=event.unified_msg_origin)
+                self._debug("ai provider available=%s", bool(provider_id))
                 if not provider_id:
                     yield event.plain_result("当前没有可用的 LLM 提供商。"); return
                 from astrbot.core.agent.tool import ToolSet
@@ -291,6 +340,7 @@ class SatelliteForecastPlugin(Star):
                 tools = ToolSet()
                 for tool in getattr(manager, "func_list", []):
                     tools.add_tool(tool)
+                self._debug("ai tool loop: registered_tools=%d", len(getattr(manager, "func_list", [])))
                 response = await self.context.tool_loop_agent(
                     event=event,
                     chat_provider_id=provider_id,
@@ -300,6 +350,7 @@ class SatelliteForecastPlugin(Star):
                     tool_call_timeout=60,
                 )
                 text = getattr(response, "completion_text", None) or str(response)
+                self._debug("ai tool loop completed: response_type=%s text_length=%d", type(response).__name__, len(text))
                 yield event.plain_result(text)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("/q ai failed")
@@ -315,9 +366,11 @@ class SatelliteForecastPlugin(Star):
             location(string): 地名或 4/6 位网格。
         """
         try:
+            self._debug("tool resolve_observer_location: input_length=%d", len(location))
             result = await resolve_location(location)
             return event.plain_result(f"{result.display_name or location}：纬度 {result.latitude:.6f}，经度 {result.longitude:.6f}")
         except Exception as exc:  # noqa: BLE001
+            self._debug("tool resolve_observer_location failed: %s", type(exc).__name__)
             return event.plain_result(f"位置解析失败：{exc}")
 
     @filter.llm_tool(name="set_my_location")
@@ -329,22 +382,26 @@ class SatelliteForecastPlugin(Star):
             altitude_m(number): 海拔米数。
         """
         try:
+            self._debug("tool set_my_location: input_length=%d altitude=%s", len(location), altitude_m)
             result = await resolve_location(location)
             self.storage.set_location(UserLocation(self._user_key(event), result.latitude, result.longitude, result.display_name or location, altitude_m))
             return event.plain_result(f"已绑定：{result.display_name or location}（{result.latitude:.5f}, {result.longitude:.5f}）")
         except Exception as exc:  # noqa: BLE001
+            self._debug("tool set_my_location failed: %s", type(exc).__name__)
             return event.plain_result(f"位置绑定失败：{exc}")
 
     @filter.llm_tool(name="get_my_location")
     async def get_my_location(self, event: AstrMessageEvent) -> MessageEventResult:
         """查询当前用户绑定的观测位置。"""
         item = self.storage.get_location(self._user_key(event))
+        self._debug("tool get_my_location: found=%s", item is not None)
         return event.plain_result("尚未绑定观测位置。" if item is None else f"{item.name}：{item.latitude:.5f}, {item.longitude:.5f}，海拔 {item.altitude_m:g} 米")
 
     @filter.llm_tool(name="list_my_satellites")
     async def list_my_satellites(self, event: AstrMessageEvent) -> MessageEventResult:
         """列出当前用户关注的卫星。"""
         items = self.storage.list_followed_satellites(self._user_key(event))
+        self._debug("tool list_my_satellites: count=%d", len(items))
         return event.plain_result("暂无关注卫星。" if not items else "\n".join(f"{i}. {x.display_name}（NORAD {x.norad_id}）" for i, x in enumerate(items, 1)))
 
     @filter.llm_tool(name="add_my_satellite")
@@ -354,6 +411,7 @@ class SatelliteForecastPlugin(Star):
         Args:
             satellite(string): 卫星描述。
         """
+        self._debug("tool add_my_satellite: query=%s", satellite[:80])
         item, error = self._find(satellite)
         if error:
             return event.plain_result(error)
@@ -367,6 +425,7 @@ class SatelliteForecastPlugin(Star):
         Args:
             satellite(string): 卫星描述。
         """
+        self._debug("tool remove_my_satellite: query=%s", satellite[:80])
         item, error = self._find(satellite)
         if error:
             return event.plain_result(error)
@@ -381,6 +440,7 @@ class SatelliteForecastPlugin(Star):
             query(string): 卫星搜索词。
         """
         results = self.index.search(query, 10)
+        self._debug("tool search_satellites: query=%s results=%d", query[:80], len(results))
         return event.plain_result("没有找到匹配的卫星。" if not results else
                                   "\n".join(f"{i}. {x.satellite.name}（NORAD {x.satellite.norad_id}）" for i, x in enumerate(results, 1)))
 
@@ -392,6 +452,7 @@ class SatelliteForecastPlugin(Star):
             satellite(string): 卫星名称、缩写或 NORAD ID。
             hours(number): 预测小时数。
         """
+        self._debug("tool predict_my_satellite_passes: query=%s hours=%s", satellite[:80], hours)
         if not 1 <= hours <= 168:
             return event.plain_result("hours 必须在 1 到 168 之间。")
         return event.plain_result(await self._passes(event, satellite, hours))
@@ -408,6 +469,7 @@ class SatelliteForecastPlugin(Star):
             altitude_m(number): 观测点海拔，单位为米。
             hours(number): 预测未来小时数，范围 1 到 168。
         """
+        self._debug("tool predict_satellite_passes: query=%s lat=%s lon=%s hours=%s", satellite[:80], latitude, longitude, hours)
         if not 1 <= hours <= 168:
             return event.plain_result("hours 必须在 1 到 168 之间。")
         try:
@@ -439,6 +501,7 @@ class SatelliteForecastPlugin(Star):
         Args:
             satellite(string): 卫星名称、缩写或 NORAD ID。
         """
+        self._debug("tool get_satellite_transmitters: query=%s", satellite[:80])
         item, error = self._find(satellite)
         if error:
             return event.plain_result(error)

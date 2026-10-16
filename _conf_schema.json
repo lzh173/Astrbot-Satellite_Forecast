@@ -1,4 +1,9 @@
 {
+    "debug_logging": {
+      "type": "bool",
+      "description": "输出插件详细调试日志（可能包含查询摘要和数据统计，不包含完整提示词）",
+      "default": false
+    },
     "sync_on_start": {
       "type": "bool",
       "description": "插件启动时立即同步数据",
@@ -21,7 +26,8 @@
       "items": {
         "endpoint": {"type": "string", "default": "https://celestrak.org/NORAD/elements/gp.php"},
         "group": {"type": "string", "default": "active"},
-        "format": {"type": "string", "options": ["tle", "json"], "default": "tle"}
+        "format": {"type": "string", "options": ["tle", "json"], "default": "tle"},
+        "headers": {"type": "object", "description": "兼容源所需的额外 HTTP 请求头（不要填写密钥）", "default": {}}
       }
     },
     "satnogs": {

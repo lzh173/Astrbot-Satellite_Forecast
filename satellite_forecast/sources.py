@@ -210,20 +210,32 @@ class CelesTrakSource:
         *,
         group: str = "active",
         format: str = "json",
+        headers: Mapping[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.endpoint = endpoint
         self.group = group
         self.format = format
+        self.headers = {
+            "User-Agent": "AstrBot-Satellite-Forecast/0.1 (+https://github.com/lzh173/Astrbot-Satellite_Forecast)",
+            "Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
+        }
+        if headers:
+            self.headers.update(headers)
         self.client = client
 
     async def fetch(self) -> list[SatelliteRecord]:
         params = {"GROUP": self.group, "FORMAT": self.format}
         if self.client is None:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, headers=self.headers) as client:
                 response = await client.get(self.endpoint, params=params)
         else:
-            response = await self.client.get(self.endpoint, params=params)
+            # Explicitly merge client defaults so httpx's default User-Agent
+            # cannot replace the source adapter's descriptive identity.
+            request_headers = httpx.Headers(self.client.headers)
+            for name, value in self.headers.items():
+                request_headers[name] = value
+            response = await self.client.get(self.endpoint, params=params, headers=request_headers)
         response.raise_for_status()
         payload: Any = response.json() if self.format in {"json", "gp", "omm"} else response.text
         return parse_celestrak(payload, self.format)
