@@ -77,6 +77,20 @@ python scripts/download_ephemeris.py --output satellite.db
 data/plugin_data/astrbot_plugin_satellite_forecast/satellite.db
 ```
 
+下载和合成也可以分两步进行。先在可联网机器上只保存源文件：
+
+```powershell
+python scripts/download_ephemeris.py --download-only --raw-dir source_data
+```
+
+这会生成 `source_data/ephemeris.json`（或 `ephemeris.tle`）和 `source_data/transmitters.json`。将整个 `source_data` 目录复制到服务器后，在服务器上完全离线合成数据库：
+
+```powershell
+python scripts/download_ephemeris.py --from-files source_data --output satellite.db
+```
+
+`--from-files` 不会访问网络。使用 TLE 文件时，下载和合成两步都要加 `--format tle`。如果没有转发器文件，脚本仍可合成数据库，但卫星不会显示转发器信息。
+
 也可以只生成星历，或指定 CelesTrak/SatNOGS 兼容镜像：
 
 ```powershell

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 import tempfile
 import traceback
@@ -25,7 +26,12 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from satellite_forecast.models import SatelliteRecord as StoredSatellite, SatelliteTransmitter
-from satellite_forecast.sources import CelesTrakSource, SatNOGSTransponderSource
+from satellite_forecast.sources import (
+    CelesTrakSource,
+    SatNOGSTransponderSource,
+    parse_celestrak,
+    parse_satnogs_transponders,
+)
 from satellite_forecast.storage import Storage
 
 
@@ -47,6 +53,54 @@ def _proxy_label(proxy: str | None) -> str:
         return "direct"
     parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
     return f"{parsed.hostname or '<proxy>'}:{parsed.port or 80}"
+
+
+def _write_atomically(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n",
+                                     dir=path.parent, delete=False) as handle:
+        handle.write(content)
+        temporary = Path(handle.name)
+    temporary.replace(path)
+
+
+def save_source_files(raw_dir: Path, records, transmitters, data_format: str) -> None:
+    """Save parsed source payloads before any database synthesis starts."""
+    raw_dir = raw_dir.expanduser().resolve()
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    if data_format == "tle":
+        content = "\n".join(
+            f"{record.name}\n{record.line1}\n{record.line2}"
+            for record in records if record.line1 and record.line2
+        ) + "\n"
+        _write_atomically(raw_dir / "ephemeris.tle", content)
+    else:
+        payload = [dict(record.omm or record.raw) for record in records]
+        _write_atomically(raw_dir / "ephemeris.json", json.dumps(payload, ensure_ascii=False, indent=2))
+    _write_atomically(
+        raw_dir / "transmitters.json",
+        json.dumps([dict(item.raw) for item in transmitters], ensure_ascii=False, indent=2),
+    )
+
+
+def load_source_files(raw_dir: Path, data_format: str):
+    """Load previously saved ephemeris and transmitter source files."""
+    raw_dir = raw_dir.expanduser().resolve()
+    if data_format == "tle":
+        ephemeris_path = raw_dir / "ephemeris.tle"
+        if not ephemeris_path.is_file():
+            raise FileNotFoundError(f"missing source file: {ephemeris_path}")
+        records = parse_celestrak(ephemeris_path.read_text(encoding="utf-8"), "tle")
+    else:
+        ephemeris_path = raw_dir / "ephemeris.json"
+        if not ephemeris_path.is_file():
+            raise FileNotFoundError(f"missing source file: {ephemeris_path}")
+        records = parse_celestrak(json.loads(ephemeris_path.read_text(encoding="utf-8")), "json")
+    transmitter_path = raw_dir / "transmitters.json"
+    transmitters = []
+    if transmitter_path.is_file():
+        transmitters = parse_satnogs_transponders(json.loads(transmitter_path.read_text(encoding="utf-8")))
+    return records, transmitters
 
 
 def _stored_satellite(record, transmitters) -> StoredSatellite:
@@ -85,39 +139,50 @@ async def build_database(
     timeout: float = 60.0,
     proxy: str | None = None,
     use_system_proxy: bool = True,
+    raw_dir: Path | None = None,
+    from_files: Path | None = None,
+    build_database_file: bool = True,
 ) -> tuple[int, int]:
-    """Download sources and atomically create ``output``."""
+    """Download/save sources or load them from files and create ``output``."""
 
     headers = {
         "User-Agent": "AstrBot-Satellite-Forecast-offline-builder/0.1",
         "Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
     }
-    if proxy is None and use_system_proxy:
-        proxy = _system_proxy(celestrak_endpoint) or _system_proxy(satnogs_endpoint)
-    async with httpx.AsyncClient(
-        timeout=timeout, headers=headers, follow_redirects=True, proxy=proxy
-    ) as client:
-        try:
-            records = await CelesTrakSource(
-                endpoint=celestrak_endpoint,
-                group=group,
-                format=data_format,
-                client=client,
-            ).fetch()
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                f"CelesTrak download failed: {type(exc).__name__}: {exc!r}"
-            ) from exc
-        transmitters = []
-        if not skip_transmitters:
+    if from_files is not None:
+        records, transmitters = load_source_files(from_files, data_format)
+    else:
+        if proxy is None and use_system_proxy:
+            proxy = _system_proxy(celestrak_endpoint) or _system_proxy(satnogs_endpoint)
+        async with httpx.AsyncClient(
+            timeout=timeout, headers=headers, follow_redirects=True, proxy=proxy
+        ) as client:
             try:
-                transmitters = await SatNOGSTransponderSource(
-                    satnogs_endpoint, client=client
-                ).fetch_all()
+                records = await CelesTrakSource(
+                    endpoint=celestrak_endpoint,
+                    group=group,
+                    format=data_format,
+                    client=client,
+                ).fetch()
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(
-                    f"SatNOGS download failed: {type(exc).__name__}: {exc!r}"
+                    f"CelesTrak download failed: {type(exc).__name__}: {exc!r}"
                 ) from exc
+            transmitters = []
+            if not skip_transmitters:
+                try:
+                    transmitters = await SatNOGSTransponderSource(
+                        satnogs_endpoint, client=client
+                    ).fetch_all()
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(
+                        f"SatNOGS download failed: {type(exc).__name__}: {exc!r}"
+                    ) from exc
+        if raw_dir is not None:
+            save_source_files(raw_dir, records, transmitters, data_format)
+
+    if not build_database_file:
+        return len(records), len(transmitters)
 
     by_norad = {}
     for item in transmitters:
@@ -160,12 +225,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug", action="store_true", help="失败时输出完整 Python traceback")
     parser.add_argument("--proxy", help="手动指定代理 URL；默认自动使用系统代理")
     parser.add_argument("--no-proxy", action="store_true", help="强制直连，忽略系统代理")
+    parser.add_argument("--raw-dir", type=Path, default=Path("source_data"), help="下载源文件保存目录")
+    parser.add_argument("--from-files", type=Path, help="从该目录的 ephemeris.* 和 transmitters.json 合成数据库，不访问网络")
+    parser.add_argument("--download-only", action="store_true", help="只下载并保存源文件，不生成数据库")
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
     try:
+        if args.download_only and args.from_files:
+            raise ValueError("--download-only cannot be combined with --from-files")
+        if args.download_only:
+            asyncio.run(build_database(
+                args.output, celestrak_endpoint=args.celestrak_endpoint,
+                group=args.group, data_format=args.data_format,
+                satnogs_endpoint=args.satnogs_endpoint,
+                skip_transmitters=args.skip_transmitters, timeout=args.timeout,
+                proxy=args.proxy, use_system_proxy=not args.no_proxy,
+                raw_dir=args.raw_dir,
+                build_database_file=False,
+            ))
+            print(f"源文件已保存到：{args.raw_dir.resolve()}")
+            return 0
         satellites, transmitters = asyncio.run(build_database(
             args.output,
             celestrak_endpoint=args.celestrak_endpoint,
@@ -176,6 +258,8 @@ def main() -> int:
             timeout=args.timeout,
             proxy=args.proxy,
             use_system_proxy=not args.no_proxy,
+            raw_dir=None if args.from_files else args.raw_dir,
+            from_files=args.from_files,
         ))
     except Exception as exc:  # noqa: BLE001
         message = f"generation failed [{type(exc).__name__}]: {exc!r}"
@@ -183,7 +267,7 @@ def main() -> int:
         if args.debug:
             traceback.print_exc()
         return 1
-    selected_proxy = None if args.no_proxy else (args.proxy or _system_proxy(DEFAULT_CELESTRAK))
+    selected_proxy = None if args.no_proxy or args.from_files else (args.proxy or _system_proxy(DEFAULT_CELESTRAK))
     print(f"生成完成：{args.output.resolve()}")
     print(f"星历：{satellites} 条；转发器：{transmitters} 条")
     print(f"网络：{_proxy_label(selected_proxy)}")
