@@ -6,8 +6,8 @@
     },
     "command_name": {
       "type": "string",
-      "description": "菜单命令名称，可填写 X 以使用 /X；/q 始终保留兼容",
-      "default": "q"
+      "description": "菜单命令名称，可填写 X 以使用 /X；不能填写 q，请避免与其他机器人使用相同命令",
+      "default": "sat"
     },
     "sync_on_start": {
       "type": "bool",

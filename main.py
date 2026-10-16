@@ -38,13 +38,10 @@ from satellite_forecast.storage import Storage
 PLUGIN_NAME = "astrbot_plugin_satellite_forecast"
 
 
-def _q_argument(message: str | None, command_name: str = "q") -> str:
-    """Extract arguments whether AstrBot kept the slash and command name."""
+def _command_argument(message: str | None, command_name: str) -> str:
+    """Extract arguments from the configured command entrypoint."""
     text = (message or "").strip()
-    # Depending on the adapter/dispatcher, message_str can be `/q 1`, `q 1`,
-    # or just `1` after the command filter has consumed the command token.
-    names = "(?:q|" + re.escape(command_name) + ")" if command_name != "q" else "q"
-    text = re.sub(r"^/?" + names + r"(?:\s+|$)", "", text, count=1, flags=re.IGNORECASE)
+    text = re.sub(r"^/?" + re.escape(command_name) + r"(?:\s+|$)", "", text, count=1, flags=re.IGNORECASE)
     return text.strip()
 
 
@@ -62,8 +59,11 @@ class SatelliteForecastPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config or {}
-        configured_command = str(self.config.get("command_name", "q")).strip().lstrip("/")
-        self.command_name = configured_command if re.fullmatch(r"[A-Za-z0-9_]+", configured_command) else "q"
+        configured_command = str(self.config.get("command_name", "sat")).strip().lstrip("/")
+        if configured_command.lower() == "q":
+            logger.warning("command_name=q is reserved and disabled; using /sat instead")
+            configured_command = "sat"
+        self.command_name = configured_command if re.fullmatch(r"[A-Za-z0-9_]+", configured_command) else "sat"
         self.debug_enabled = bool(self.config.get("debug_logging", False))
         data_dir = self.config.get("data_dir", "data/plugin_data/astrbot_plugin_satellite_forecast")
         self.storage = Storage(Path(data_dir) / "satellite.db")
@@ -264,14 +264,15 @@ class SatelliteForecastPlugin(Star):
         """Format a pass list with each orbital milestone clearly labeled."""
         title = f"{satellite_name}（NORAD {norad_id}）过境预报"
         if hours is not None:
-            title += f"（未来 {hours} 小时）"
-        lines = [title + "："]
+            title += f"\n预测范围：未来 {hours} 小时"
+        lines = [title]
         for index, item in enumerate(passes[:5], 1):
-            lines.extend([
-                f"{index}. 过境窗口：{self._time(item.aos, timezone_name)} - {self._time(item.eos, timezone_name)}",
-                f"   最高仰角：{item.max_elevation_degrees:.1f}°（发生于 {self._time(item.max_elevation_time, timezone_name)}）",
-                f"   最高点方位：{item.max_azimuth_degrees:.1f}°，{item.max_direction}",
-            ])
+            lines.extend((
+                "",
+                f"{index}. 过境时间：{self._time(item.aos, timezone_name)} 至 {self._time(item.eos, timezone_name)}",
+                f"   最高仰角：{item.max_elevation_degrees:.1f}°（{self._time(item.max_elevation_time, timezone_name)}）",
+                f"   最高点方向：{item.max_direction}（方位角 {item.max_azimuth_degrees:.1f}°）",
+            ))
         return "\n".join(lines)
 
     async def _passes(self, event: AstrMessageEvent, query: str, hours: int = 24) -> str:
@@ -307,21 +308,22 @@ class SatelliteForecastPlugin(Star):
 
     @filter.event_message_type(EventMessageType.ALL)
     async def configured_command(self, event: AstrMessageEvent):
-        """Dispatch the configured command name; ``/q`` remains the built-in route."""
-        if self.command_name == "q":
-            return
+        """Dispatch the configured command name and pending numeric choices."""
         text = (event.message_str or "").strip()
         pattern = rf"^/?{re.escape(self.command_name)}(?:\s+|$)"
-        if not re.match(pattern, text, flags=re.IGNORECASE):
+        is_command = re.match(pattern, text, flags=re.IGNORECASE) is not None
+        is_pending_choice = text.isdigit() and self.storage.get_pending_interaction(
+            self._user_key(event), "choose_satellite"
+        ) is not None
+        if not is_command and not is_pending_choice:
             return
-        self._debug("configured command received: name=%s", self.command_name)
-        async for result in self.q(event):
+        self._debug("command event received: configured_name=%s pending_choice=%s", self.command_name, is_pending_choice)
+        async for result in self._command_handler(event):
             yield result
 
-    @filter.command("q")
-    async def q(self, event: AstrMessageEvent):
+    async def _command_handler(self, event: AstrMessageEvent):
         """卫星预报菜单入口。"""
-        argument = _q_argument(event.message_str, self.command_name)
+        argument = _command_argument(event.message_str, self.command_name)
         self._debug("command received: argument=%s", argument[:120] if argument else "<menu>")
         if not argument:
             yield event.plain_result(self._menu()); return

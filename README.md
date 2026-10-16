@@ -14,29 +14,29 @@ Install the plugin dependencies from `requirements.txt`, then reload the plugin 
 
 ## Commands
 
-默认菜单命令为 `/q`。可以在插件配置中将 `command_name` 改为 `X`，之后使用 `/X` 打开菜单；`/q` 仍然可用作兼容入口。配置值可以填写 `X` 或 `/X`。
+默认菜单命令为 `/sat`。可以在插件配置中将 `command_name` 改为 `X`，之后使用 `/X` 打开菜单。配置值可以填写 `X` 或 `/X`，建议选择不会与其他机器人冲突的名称；插件不会注册固定的 `/q` 命令。
 
 ```text
-/q
-/q 1 Xiamen
-/q 1 PM53
-/q 2 metop-c
-/q 5 fy2g
-/q add metop-c
-/q del metop-c
-/q pass metop-c
-/q set elevation 10
-/q 4
-/q 6
+/sat
+/sat 1 Xiamen
+/sat 1 PM53
+/sat 2 metop-c
+/sat 5 fy2g
+/sat add metop-c
+/sat del metop-c
+/sat pass metop-c
+/sat set elevation 10
+/sat 4
+/sat 6
 ```
 
-`/q 1` binds a location to the current user. Locations support place names and Maidenhead locators. A user location is shared across that user's private and group conversations on the same platform.
+`/sat 1` binds a location to the current user. Locations support place names and Maidenhead locators. A user location is shared across that user's private and group conversations on the same platform.
 
 Satellite search accepts names, aliases, descriptions, international designators, and NORAD catalog IDs. Inputs such as `metop-c` and `fy2g` are supported when they exist in the synchronized catalog.
 
-`/q 2` lists followed satellites; `/q 2 metop-c` calculates visible passes directly. `/q 4` shows the bound location, followed satellites, and a next-pass summary. `/q 5 fy2g` performs a fuzzy catalog search. When a menu command needs more information, the reply includes an example and the next action to take.
+`/sat 2` lists followed satellites; `/sat 2 metop-c` calculates visible passes directly. `/sat 4` shows the bound location, followed satellites, and a next-pass summary. `/sat 5 fy2g` performs a fuzzy catalog search. When a menu command needs more information, the reply includes an example and the next action to take. After a search returns numbered candidates, simply reply with the number.
 
-When a search or `/q add` command returns multiple candidates, reply with its number to select one. `/q 5` without a query shows usage instead of listing followed satellites. Pass times default to `Asia/Shanghai`; an explicitly saved user timezone is respected.
+When a search or `/sat add` command returns multiple candidates, reply with its number to select one. `/sat 5` without a query shows usage instead of listing followed satellites. Pass times default to `Asia/Shanghai`; an explicitly saved user timezone is respected.
 
 ## LLM tools
 
