@@ -29,8 +29,7 @@ except ImportError:  # pragma: no cover - older AstrBot versions
 
 from satellite_forecast.geocoding import Location, resolve_location
 from satellite_forecast.models import FollowedSatellite, PendingInteraction, SatelliteRecord as StoredSatellite, SatelliteTransmitter, UserLocation, UserSettings, utc_now
-from satellite_forecast.prediction import predict_passes, sample_pass_track
-from satellite_forecast.sky_chart import render_sky_chart
+from satellite_forecast.prediction import predict_passes
 from satellite_forecast.satellite_search import SatelliteSearchIndex
 from satellite_forecast.sources import CelesTrakSource, SatNOGSTransponderSource, SatelliteRecord as SourceSatellite
 from satellite_forecast.storage import Storage
@@ -307,6 +306,11 @@ class SatelliteForecastPlugin(Star):
         if text.startswith(("没有找到", "还没有绑定", "本地没有", "未来 ", "更新")):
             return text, None
         try:
+            # Older or partially copied plugin directories can still provide
+            # text forecasts while the optional chart files are being updated.
+            from satellite_forecast.prediction import sample_pass_track
+            from satellite_forecast.sky_chart import render_sky_chart
+
             satellite, error = self._find(query)
             location = await self._user_location(event)
             stored = self.storage.get_satellite(str(satellite.norad_id)) if satellite and location else None
@@ -323,12 +327,24 @@ class SatelliteForecastPlugin(Star):
             self._debug("sky chart generation failed: %s", type(exc).__name__)
             return text, None
 
-    @staticmethod
-    def _image_result(path):
+    def _image_result(self, path):
         try:
             from astrbot.api.message_components import Image
             return Image.fromFileSystem(str(path))
-        except (ImportError, AttributeError):
+        except Exception as exc:  # noqa: BLE001
+            self._debug("sky chart image component failed: %s", type(exc).__name__)
+            return None
+
+    def _pass_result(self, text: str, chart):
+        """Build one message chain so adapters receive text and image together."""
+        image = self._image_result(chart) if chart else None
+        if image is None:
+            return None
+        try:
+            from astrbot.api.message_components import Plain
+            return [Plain(text), image]
+        except Exception as exc:  # noqa: BLE001
+            self._debug("sky chart message chain failed: %s", type(exc).__name__)
             return None
 
     def _menu(self) -> str:
@@ -440,10 +456,8 @@ class SatelliteForecastPlugin(Star):
                 yield event.plain_result("设置无效，请填写数字。\n例如：" + f"{self._command()} set elevation 10"); return
         if argument.startswith("pass "):
             text, chart = await self._passes_with_chart(event, argument[5:].strip())
-            yield event.plain_result(text)
-            image = self._image_result(chart) if chart else None
-            if image is not None:
-                yield event.chain_result([image])
+            chain = self._pass_result(text, chart)
+            yield event.chain_result(chain) if chain else event.plain_result(text)
             return
         if argument == "5":
             yield event.plain_result(f"请输入卫星名称、缩写或 NORAD 编号。\n例如：{self._command()} 5 metop")
@@ -459,10 +473,8 @@ class SatelliteForecastPlugin(Star):
             return
         if argument.startswith("2 "):
             text, chart = await self._passes_with_chart(event, argument[2:].strip())
-            yield event.plain_result(text)
-            image = self._image_result(chart) if chart else None
-            if image is not None:
-                yield event.chain_result([image])
+            chain = self._pass_result(text, chart)
+            yield event.chain_result(chain) if chain else event.plain_result(text)
             return
         if argument in {"2", "4"}:
             followed = self.storage.list_followed_satellites(self._user_key(event))

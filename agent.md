@@ -102,6 +102,8 @@ git diff --check
 - `scripts/satellite.db`
 - `scripts/source_data/`
 
+图片轨迹功能要求部署目录同时包含 `satellite_forecast/prediction.py` 中的 `sample_pass_track` 和新增的 `satellite_forecast/sky_chart.py`，并安装 `requirements.txt` 中的 Pillow。升级时应整体覆盖插件目录后重新加载；若只覆盖 `main.py`，旧版子模块会导致功能缺失。
+
 继续工作前先执行：
 
 ```powershell
