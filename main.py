@@ -194,7 +194,7 @@ class SatelliteForecastPlugin(Star):
         except Exception as exc:  # noqa: BLE001
             logger.exception("satellite sync failed")
             self._debug("sync failed after %.2fs: %s", time.monotonic() - started, type(exc).__name__)
-            return f"更新失败，已保留旧数据：{exc}"
+            return "更新失败，已保留原有数据。请稍后重试；如持续失败，请检查网络或代理设置。"
 
     def _find(self, query: str):
         matches = self.index.search(query, 10)
@@ -225,7 +225,7 @@ class SatelliteForecastPlugin(Star):
         index = int(argument) - 1
         candidates = pending.payload.get("norad_ids", [])
         if index < 0 or index >= len(candidates):
-            return f"选择无效，请回复 1 到 {len(candidates)}。"
+            return f"这个编号无效，请回复 1 到 {len(candidates)} 之间的数字。"
         item = self.storage.get_satellite(str(candidates[index]))
         self.storage.clear_pending_interaction(self._user_key(event), "choose_satellite")
         if item is None:
@@ -301,15 +301,18 @@ class SatelliteForecastPlugin(Star):
         return self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours)
 
     def _menu(self) -> str:
+        command = self._command()
         return ("卫星过境助手\n"
-                "1. 设置或查看观测位置\n"
-                "2. 查看关注卫星或计算过境\n"
-                "3. 调整提醒参数\n"
-                "4. 查看当前状态\n"
+                "回复数字选择功能：\n"
+                "1. 观测位置（设置或查看）\n"
+                "2. 关注卫星与过境预报\n"
+                "3. 提醒设置\n"
+                "4. 查看我的状态\n"
                 "5. 搜索卫星\n"
-                "6. 更新星历和转发器\n"
-                "0. 退出菜单\n\n"
-                "试试带机器人唤醒词问：Metop-C明天在OL63有什么过境")
+                "6. 更新星历数据\n"
+                "0. 关闭菜单\n\n"
+                f"常用命令：{command} 1 厦门｜{command} add METOP-C｜{command} 2 METOP-C\n"
+                "也可以直接问：Metop-C 明天在 OL63 有哪些过境？")
 
     @filter.event_message_type(EventMessageType.ALL)
     async def configured_command(self, event: AstrMessageEvent):
@@ -336,22 +339,24 @@ class SatelliteForecastPlugin(Star):
         if selection is not None:
             yield event.plain_result(selection); return
         if argument == "0":
-            yield event.plain_result("收工。\n"); return
+            yield event.plain_result("已关闭卫星过境助手。需要时再次发送菜单命令即可。\n"); return
         if argument == "1":
             saved = self.storage.get_location(self._user_key(event))
             yield event.plain_result(
-                f"还没有设置观测位置。发送 {self._command()} 1 地名或 Maidenhead 网格，例如：{self._command()} 1 OL63。"
+                f"还没有设置观测位置。\n请发送：{self._command()} 1 地名或 Maidenhead 网格\n例如：{self._command()} 1 厦门 或 {self._command()} 1 OL63。"
                 if not saved else
-                f"当前观测位置：{saved.name}（纬度 {saved.latitude:.4f}，经度 {saved.longitude:.4f}）。\n"
-                f"需要更换位置时，发送 {self._command()} 1 地名或网格。"
+                f"当前观测位置：{saved.name}\n纬度：{saved.latitude:.4f}｜经度：{saved.longitude:.4f}\n"
+                f"需要更换位置时，发送：{self._command()} 1 地名或网格。"
             ); return
         if argument.startswith("1 "):
             try:
                 location = await self._user_location(event, argument[2:].strip())
-                yield event.plain_result(f"观测位置已设置为：{location.display_name or argument[2:].strip()}\n"
-                                         f"坐标：纬度 {location.latitude:.4f}，经度 {location.longitude:.4f}")
+                yield event.plain_result(f"观测位置已更新：{location.display_name or argument[2:].strip()}\n"
+                                         f"坐标：{location.latitude:.4f}，{location.longitude:.4f}\n"
+                                         f"现在可以发送 {self._command()} 2 卫星名称查询过境。")
             except Exception as exc:  # noqa: BLE001
-                yield event.plain_result(f"没能识别这个位置：{exc}\n请改用城市名称或 Maidenhead 网格，例如 OL63。")
+                self._debug("location command failed: %s", type(exc).__name__)
+                yield event.plain_result("暂时无法识别这个位置。\n请改用城市名称或 Maidenhead 网格，例如：厦门、OL63。")
             return
         if argument == "6":
             self._debug("command branch: manual sync")
@@ -391,7 +396,7 @@ class SatelliteForecastPlugin(Star):
         if argument.startswith("set "):
             parts = argument.split()
             if len(parts) != 3 or parts[1] not in {"elevation", "before", "repeat"}:
-                yield event.plain_result(f"用法：{self._command()} set elevation 10、{self._command()} set before 6、{self._command()} set repeat 1"); return
+                yield event.plain_result(f"用法示例：\n{self._command()} set elevation 10\n{self._command()} set before 6\n{self._command()} set repeat 1"); return
             try:
                 key = self._user_key(event)
                 old = self.storage.get_settings(key)
@@ -401,13 +406,14 @@ class SatelliteForecastPlugin(Star):
                                         value if parts[1] == "repeat" else old.reminder_count,
                                         old.notifications_enabled, old.tle_storage_path, old.timezone)
                 self.storage.set_settings(settings)
-                yield event.plain_result("提醒参数已更新。"); return
+                yield event.plain_result("提醒参数已更新。发送 3 可查看当前设置。"); return
             except (TypeError, ValueError) as exc:
-                yield event.plain_result(f"设置无效：{exc}"); return
+                self._debug("settings command failed: %s", type(exc).__name__)
+                yield event.plain_result("设置无效，请填写数字。\n例如：" + f"{self._command()} set elevation 10"); return
         if argument.startswith("pass "):
             yield event.plain_result(await self._passes(event, argument[5:].strip())); return
         if argument == "5":
-            yield event.plain_result(f"请输入卫星名称、缩写或 NORAD 编号，例如：{self._command()} 5 metop。")
+            yield event.plain_result(f"请输入卫星名称、缩写或 NORAD 编号。\n例如：{self._command()} 5 metop")
             return
         if argument.startswith("5 "):
             results = self.index.search(argument[2:].strip(), 10)
