@@ -61,6 +61,57 @@ def _max_point(satellite: EarthSatellite, observer: Any, time: Any) -> tuple[flo
     return float(altitude.degrees), float(azimuth.degrees % 360.0)
 
 
+def _is_geostationary(record: SatelliteRecord) -> bool:
+    """Recognize GEO records from OMM or the TLE mean-motion field."""
+    value = None
+    if record.omm:
+        value = record.omm.get("MEAN_MOTION") or record.omm.get("MEAN_MOTION_DOT")
+    if value is None and record.line2:
+        try:
+            value = record.line2[52:63].strip()
+        except IndexError:
+            value = None
+    try:
+        return value is not None and abs(float(value) - 1.0027) < 0.03
+    except (TypeError, ValueError):
+        return False
+
+
+def _sample_boundary_pass(
+    satellite: EarthSatellite,
+    observer: Any,
+    start: datetime,
+    end: datetime,
+    minimum_elevation_degrees: float,
+    timescale: Any,
+) -> PassPrediction | None:
+    """Handle GEO visibility that crosses a prediction window boundary."""
+    step = timedelta(minutes=5)
+    moments: list[datetime] = []
+    current = start
+    while current < end:
+        moments.append(current)
+        current += step
+    moments.append(end)
+    visible: list[tuple[datetime, float, float]] = []
+    for moment in moments:
+        altitude, azimuth = _max_point(satellite, observer, timescale.from_datetime(moment))
+        if altitude >= minimum_elevation_degrees:
+            visible.append((moment, altitude, azimuth))
+    if not visible:
+        return None
+    peak = max(visible, key=lambda item: item[1])
+    return PassPrediction(
+        satellite_name=satellite.name,
+        aos=visible[0][0],
+        eos=visible[-1][0],
+        max_elevation_degrees=peak[1],
+        max_elevation_time=peak[0],
+        max_azimuth_degrees=peak[2],
+        max_direction=azimuth_to_direction(peak[2]),
+    )
+
+
 def predict_passes(
     satellite: SatelliteRecord,
     location: Location,
@@ -120,6 +171,12 @@ def predict_passes(
             )
         )
         index += 3
+    if not predictions and _is_geostationary(satellite):
+        boundary_pass = _sample_boundary_pass(
+            sat, observer, start, end, minimum_elevation_degrees, ts
+        )
+        if boundary_pass is not None:
+            predictions.append(boundary_pass)
     return predictions
 
 

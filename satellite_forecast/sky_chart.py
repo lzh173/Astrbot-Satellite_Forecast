@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .prediction import TrackPoint
+from .prediction import PassPrediction, TrackPoint
 
 
 def _font(size: int):
@@ -19,7 +19,10 @@ def _font(size: int):
 
 
 def render_sky_chart(satellite_name: str, track: list[TrackPoint], *, timezone_label: str,
-                     output_dir: str | Path | None = None) -> Path:
+                     output_dir: str | Path | None = None,
+                     norad_id: str | None = None,
+                     prediction: PassPrediction | None = None,
+                     format_time=None) -> Path:
     """Render north-up, zenith-centred altitude/azimuth coordinates."""
     if not track:
         raise ValueError("track must not be empty")
@@ -27,7 +30,7 @@ def render_sky_chart(satellite_name: str, track: list[TrackPoint], *, timezone_l
     image = Image.new("RGB", (width, height), "#101820")
     draw = ImageDraw.Draw(image)
     center = (width // 2, 390)
-    radius = 250
+    radius = 230
     for altitude in (0, 30, 60, 90):
         ring = radius * (1 - altitude / 90)
         box = (center[0] - ring, center[1] - ring, center[0] + ring, center[1] + ring)
@@ -50,9 +53,18 @@ def render_sky_chart(satellite_name: str, track: list[TrackPoint], *, timezone_l
         draw.line(points, fill="#43d9a3", width=5, joint="curve")
     for point, color in ((points[0], "#f4b860"), (points[-1], "#ed6a5a")):
         draw.ellipse((point[0] - 7, point[1] - 7, point[0] + 7, point[1] + 7), fill=color)
-    draw.text((36, 28), f"{satellite_name} 过境天空轨迹", fill="#f4f7f9", font=_font(28))
-    draw.text((36, 68), f"中心：天顶 ｜ 外圈：地平线 ｜ {timezone_label}", fill="#9fb3c8", font=_font(17))
-    draw.text((36, 650), "黄色：开始  ·  红色：结束  ·  绿色：可见轨迹", fill="#dbe9f4", font=_font(17))
+    draw.text((36, 20), f"{satellite_name} 过境天空轨迹", fill="#f4f7f9", font=_font(26))
+    identifier = f"NORAD {norad_id}" if norad_id else ""
+    draw.text((36, 54), f"{identifier} ｜ {timezone_label}", fill="#9fb3c8", font=_font(17))
+    if prediction is not None:
+        formatter = format_time or (lambda value: value.strftime("%m-%d %H:%M:%S"))
+        details = (
+            f"AOS {formatter(prediction.aos)}   EOS {formatter(prediction.eos)}\n"
+            f"最高仰角 {prediction.max_elevation_degrees:.1f}°   "
+            f"最高点 {formatter(prediction.max_elevation_time)}"
+        )
+        draw.multiline_text((36, 82), details, fill="#dbe9f4", font=_font(16), spacing=4)
+    draw.text((36, 690), "黄色：开始  ·  红色：结束  ·  绿色：可见轨迹", fill="#dbe9f4", font=_font(17))
     target_dir = Path(output_dir) if output_dir else Path(tempfile.gettempdir())
     target_dir.mkdir(parents=True, exist_ok=True)
     output = target_dir / f"satellite-sky-{next(tempfile._get_candidate_names())}.png"

@@ -328,6 +328,9 @@ class SatelliteForecastPlugin(Star):
                 track,
                 timezone_label=self._timezone_label(settings.timezone),
                 output_dir=chart_dir,
+                norad_id=stored.norad_id,
+                prediction=passes[0],
+                format_time=lambda value: self._time(value, settings.timezone),
             )
             self._debug("sky chart generated: path=%s size=%d", chart, chart.stat().st_size)
             return text, chart

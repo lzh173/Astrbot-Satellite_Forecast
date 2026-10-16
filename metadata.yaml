@@ -2,7 +2,7 @@ name: astrbot_plugin_satellite_forecast
 display_name: Satellite Forecast
 desc: 查询卫星星历、转发器信息和可见过境，支持用户位置绑定。
 short_desc: 卫星过境预报与转发器查询
-version: v0.1.1-bugfix18
+version: v0.1.1-bugfix20
 author: lzh173
 repo: https://github.com/lzh173/Astrbot-Satellite_Forecast
 astrbot_version: ">=4.5.7"
