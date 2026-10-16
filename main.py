@@ -19,7 +19,7 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
+from astrbot.api.event import AstrMessageEvent, EventMessageType, MessageEventResult, filter
 from astrbot.api.star import Context, Star, register
 try:
     from astrbot.api import AstrBotConfig
@@ -37,12 +37,13 @@ from satellite_forecast.storage import Storage
 PLUGIN_NAME = "astrbot_plugin_satellite_forecast"
 
 
-def _q_argument(message: str | None) -> str:
+def _q_argument(message: str | None, command_name: str = "q") -> str:
     """Extract arguments whether AstrBot kept the slash and command name."""
     text = (message or "").strip()
     # Depending on the adapter/dispatcher, message_str can be `/q 1`, `q 1`,
     # or just `1` after the command filter has consumed the command token.
-    text = re.sub(r"^/?q(?:\s+|$)", "", text, count=1, flags=re.IGNORECASE)
+    names = "(?:q|" + re.escape(command_name) + ")" if command_name != "q" else "q"
+    text = re.sub(r"^/?" + names + r"(?:\s+|$)", "", text, count=1, flags=re.IGNORECASE)
     return text.strip()
 
 
@@ -60,6 +61,8 @@ class SatelliteForecastPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config or {}
+        configured_command = str(self.config.get("command_name", "q")).strip().lstrip("/")
+        self.command_name = configured_command if re.fullmatch(r"[A-Za-z0-9_]+", configured_command) else "q"
         self.debug_enabled = bool(self.config.get("debug_logging", False))
         data_dir = self.config.get("data_dir", "data/plugin_data/astrbot_plugin_satellite_forecast")
         self.storage = Storage(Path(data_dir) / "satellite.db")
@@ -68,6 +71,9 @@ class SatelliteForecastPlugin(Star):
         self.index = SatelliteSearchIndex(self.storage.list_satellites())
         self._sync_task: asyncio.Task | None = None
         self._debug("constructed: data_dir=%s catalog_size=%d", data_dir, len(self.index.all()))
+
+    def _command(self) -> str:
+        return "/" + self.command_name
 
     def _debug(self, message: str, *args: object) -> None:
         """Emit detailed diagnostics only when explicitly enabled in config."""
@@ -193,7 +199,7 @@ class SatelliteForecastPlugin(Star):
         if not matches:
             return None, "没有找到匹配的卫星，可输入名称、缩写或 NORAD 编号。"
         if len(matches) > 1 and matches[0].score < 100 and matches[1].score >= matches[0].score - 3:
-            return None, "找到多个候选，请缩小范围：\n" + "\n".join(
+            return None, "匹配到多颗卫星，请缩小搜索范围：\n" + "\n".join(
                 f"{i}. {m.satellite.name}（NORAD {m.satellite.norad_id}）" for i, m in enumerate(matches[:5], 1))
         return matches[0].satellite, None
 
@@ -230,7 +236,7 @@ class SatelliteForecastPlugin(Star):
             removed = self.storage.remove_followed_satellite(self._user_key(event), item.norad_id)
             return "已从关注列表移除。" if removed else "这颗卫星不在你的关注列表中。"
         if action == "search":
-            return f"已选择：{item.name}（NORAD {item.norad_id}）。可发送 /q add {item.name} 关注，或 /q 2 {item.name} 计算过境。"
+            return f"已选择：{item.name}（NORAD {item.norad_id}）。可发送 {self._command()} add {item.name} 关注，或 {self._command()} 2 {item.name} 计算过境。"
         return f"已选择：{item.name}（NORAD {item.norad_id}）。"
 
     async def _user_location(self, event: AstrMessageEvent, query: str | None = None) -> Location | None:
@@ -252,6 +258,21 @@ class SatelliteForecastPlugin(Star):
         except Exception:  # noqa: BLE001
             return value.astimezone(timezone.utc).strftime("%m-%d %H:%M:%S UTC")
 
+    def _format_passes(self, satellite_name: str, norad_id: str, passes, timezone_name: str,
+                       hours: int | None = None) -> str:
+        """Format a pass list with each orbital milestone clearly labeled."""
+        title = f"{satellite_name}（NORAD {norad_id}）过境预报"
+        if hours is not None:
+            title += f"（未来 {hours} 小时）"
+        lines = [title + "："]
+        for index, item in enumerate(passes[:5], 1):
+            lines.extend([
+                f"{index}. 过境窗口：{self._time(item.aos, timezone_name)} - {self._time(item.eos, timezone_name)}",
+                f"   最高仰角：{item.max_elevation_degrees:.1f}°（发生于 {self._time(item.max_elevation_time, timezone_name)}）",
+                f"   最高点方位：{item.max_azimuth_degrees:.1f}°，{item.max_direction}",
+            ])
+        return "\n".join(lines)
+
     async def _passes(self, event: AstrMessageEvent, query: str, hours: int = 24) -> str:
         self._debug("pass prediction requested: query=%s hours=%d", query[:80], hours)
         satellite, error = self._find(query)
@@ -259,33 +280,47 @@ class SatelliteForecastPlugin(Star):
             return error
         location = await self._user_location(event)
         if location is None:
-            return "还没有绑定观测位置，请先发送 /q 1 厦门 或 /q 1 JO62QM。"
+            return f"还没有绑定观测位置，请先发送 {self._command()} 1 厦门 或 {self._command()} 1 JO62QM。"
         settings = self.storage.get_settings(self._user_key(event))
         stored = self.storage.get_satellite(str(satellite.norad_id))
         if stored is None:
-            return "本地没有完整星历，请先发送 /q 6 更新数据。"
+            return f"本地没有完整星历，请先发送 {self._command()} 6 更新数据。"
         result = predict_passes(self._to_source(stored), location, duration=timedelta(hours=hours),
                                 minimum_elevation_degrees=settings.min_elevation_deg)
         self._debug("pass prediction completed: satellite=%s count=%d minimum_elevation=%s", stored.norad_id,
                     len(result), settings.min_elevation_deg)
         if not result:
             return f"未来 {hours} 小时内没有达到 {settings.min_elevation_deg:g}° 的过境。"
-        lines = [f"{stored.name}（NORAD {stored.norad_id}）过境："]
-        for item in result[:5]:
-            lines.append(f"AOS {self._time(item.aos, settings.timezone)} | 最大仰角 {item.max_elevation_degrees:.1f}° "
-                         f"{self._time(item.max_elevation_time, settings.timezone)} "
-                         f"{item.max_azimuth_degrees:.1f}°（{item.max_direction}） | EOS {self._time(item.eos, settings.timezone)}")
-        return "\n".join(lines)
+        return self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours)
 
     def _menu(self) -> str:
-        return ("卫星预报：\n1. 定观测位置\n2. 挑卫星算过境\n3. 改提醒设置\n4. 现在的状态\n"
-                "5. 搜索卫星\n6. 更新星历和转发器\n0. 收工\n\n"
-                "直接问：/q ai 明天厦门有啥值得收的过境")
+        return ("卫星过境助手\n"
+                "1. 设置或查看观测位置\n"
+                "2. 查看关注卫星或计算过境\n"
+                "3. 调整提醒参数\n"
+                "4. 查看当前状态\n"
+                "5. 搜索卫星\n"
+                "6. 更新星历和转发器\n"
+                "0. 退出菜单\n\n"
+                "试试带机器人唤醒词问：Metop-C明天在OL63有什么过境")
+
+    @filter.event_message_type(EventMessageType.ALL)
+    async def configured_command(self, event: AstrMessageEvent):
+        """Dispatch the configured command name; ``/q`` remains the built-in route."""
+        if self.command_name == "q":
+            return
+        text = (event.message_str or "").strip()
+        pattern = rf"^/?{re.escape(self.command_name)}(?:\s+|$)"
+        if not re.match(pattern, text, flags=re.IGNORECASE):
+            return
+        self._debug("configured command received: name=%s", self.command_name)
+        async for result in self.q(event):
+            yield result
 
     @filter.command("q")
     async def q(self, event: AstrMessageEvent):
         """卫星预报菜单入口。"""
-        argument = _q_argument(event.message_str)
+        argument = _q_argument(event.message_str, self.command_name)
         self._debug("command received: argument=%s", argument[:120] if argument else "<menu>")
         if not argument:
             yield event.plain_result(self._menu()); return
@@ -296,27 +331,32 @@ class SatelliteForecastPlugin(Star):
             yield event.plain_result("收工。\n"); return
         if argument == "1":
             saved = self.storage.get_location(self._user_key(event))
-            yield event.plain_result("当前没有绑定位置，请使用 /q 1 地名或网格。" if not saved else
-                                     f"当前位置：{saved.name}（{saved.latitude:.4f}, {saved.longitude:.4f}）"); return
+            yield event.plain_result(
+                f"还没有设置观测位置。发送 {self._command()} 1 地名或 Maidenhead 网格，例如：{self._command()} 1 OL63。"
+                if not saved else
+                f"当前观测位置：{saved.name}（纬度 {saved.latitude:.4f}，经度 {saved.longitude:.4f}）。\n"
+                f"需要更换位置时，发送 {self._command()} 1 地名或网格。"
+            ); return
         if argument.startswith("1 "):
             try:
                 location = await self._user_location(event, argument[2:].strip())
-                yield event.plain_result(f"位置已绑定：{location.display_name or argument[2:].strip()}（{location.latitude:.4f}, {location.longitude:.4f}）")
+                yield event.plain_result(f"观测位置已设置为：{location.display_name or argument[2:].strip()}\n"
+                                         f"坐标：纬度 {location.latitude:.4f}，经度 {location.longitude:.4f}")
             except Exception as exc:  # noqa: BLE001
-                yield event.plain_result(f"位置解析失败：{exc}")
+                yield event.plain_result(f"没能识别这个位置：{exc}\n请改用城市名称或 Maidenhead 网格，例如 OL63。")
             return
         if argument == "6":
             self._debug("command branch: manual sync")
             yield event.plain_result(await self._sync()); return
         if argument == "add" or argument == "remove" or argument == "del":
-            yield event.plain_result("用法：/q add 卫星名称，或 /q del 卫星名称。"); return
+            yield event.plain_result(f"请补充卫星名称，例如：{self._command()} add METOP-C，或 {self._command()} del METOP-C。"); return
         if argument.startswith("add "):
             query = argument[4:].strip()
             matches = self.index.search(query, 10)
             satellite, error = self._find(query)
             if len(matches) > 1 and matches[0].score < 100 and matches[1].score >= matches[0].score - 3:
                 self._save_selection(event, "add", matches)
-                yield event.plain_result("找到多个候选，请回复序号：\n" + "\n".join(
+                yield event.plain_result("匹配到多颗卫星，请回复编号选择：\n" + "\n".join(
                     f"{i}. {m.satellite.name}（NORAD {m.satellite.norad_id}）" for i, m in enumerate(matches[:5], 1)))
                 return
             if error:
@@ -328,7 +368,7 @@ class SatelliteForecastPlugin(Star):
             matches = self.index.search(query, 10)
             if len(matches) > 1 and matches[0].score < 100 and matches[1].score >= matches[0].score - 3:
                 self._save_selection(event, "remove", matches)
-                yield event.plain_result("找到多个候选，请回复序号：\n" + "\n".join(
+                yield event.plain_result("匹配到多颗卫星，请回复编号选择：\n" + "\n".join(
                     f"{i}. {m.satellite.name}（NORAD {m.satellite.norad_id}）" for i, m in enumerate(matches[:5], 1)))
                 return
             satellite, error = self._find(query)
@@ -339,11 +379,11 @@ class SatelliteForecastPlugin(Star):
         if argument == "3":
             settings = self.storage.get_settings(self._user_key(event))
             yield event.plain_result(f"提醒设置：最低仰角 {settings.min_elevation_deg:g}°，提前 {settings.reminder_minutes} 分钟，提醒 {settings.reminder_count} 次。\n"
-                                     "修改示例：/q set elevation 10"); return
+                                     f"修改示例：{self._command()} set elevation 10"); return
         if argument.startswith("set "):
             parts = argument.split()
             if len(parts) != 3 or parts[1] not in {"elevation", "before", "repeat"}:
-                yield event.plain_result("用法：/q set elevation 10、/q set before 6、/q set repeat 1"); return
+                yield event.plain_result(f"用法：{self._command()} set elevation 10、{self._command()} set before 6、{self._command()} set repeat 1"); return
             try:
                 key = self._user_key(event)
                 old = self.storage.get_settings(key)
@@ -353,13 +393,13 @@ class SatelliteForecastPlugin(Star):
                                         value if parts[1] == "repeat" else old.reminder_count,
                                         old.notifications_enabled, old.tle_storage_path, old.timezone)
                 self.storage.set_settings(settings)
-                yield event.plain_result("提醒设置已更新。"); return
+                yield event.plain_result("提醒参数已更新。"); return
             except (TypeError, ValueError) as exc:
                 yield event.plain_result(f"设置无效：{exc}"); return
         if argument.startswith("pass "):
             yield event.plain_result(await self._passes(event, argument[5:].strip())); return
         if argument == "5":
-            yield event.plain_result("用法：/q 5 卫星名称，例如 /q 5 metop。")
+            yield event.plain_result(f"请输入卫星名称、缩写或 NORAD 编号，例如：{self._command()} 5 metop。")
             return
         if argument.startswith("5 "):
             results = self.index.search(argument[2:].strip(), 10)
@@ -367,7 +407,7 @@ class SatelliteForecastPlugin(Star):
                 yield event.plain_result("没有找到匹配的卫星。")
                 return
             self._save_selection(event, "search", results)
-            yield event.plain_result("搜索结果（回复序号可选择）：\n" +
+            yield event.plain_result("搜索结果如下，回复编号即可选择：\n" +
                 "\n".join(f"{i}. {x.satellite.name}（NORAD {x.satellite.norad_id}）" for i, x in enumerate(results, 1)))
             return
         if argument.startswith("2 "):
@@ -386,39 +426,10 @@ class SatelliteForecastPlugin(Star):
             else:
                 text = ("关注卫星：\n" + "\n".join(
                     f"{i}. {x.display_name}（{x.norad_id}）" for i, x in enumerate(followed, 1)) +
-                    "\n发送 /q 2 卫星名称 可直接计算。") if followed else "还没有关注卫星。用 /q add 卫星名称 添加。"
+                    f"\n发送 {self._command()} 2 卫星名称即可计算。") if followed else f"关注列表还是空的。发送 {self._command()} add 卫星名称添加一颗卫星。"
                 yield event.plain_result(text)
             return
-        if argument.lower().startswith("ai "):
-            prompt = argument[3:].strip()
-            self._debug("command branch: ai prompt_length=%d", len(prompt))
-            try:
-                provider_id = await self.context.get_current_chat_provider_id(umo=event.unified_msg_origin)
-                self._debug("ai provider available=%s", bool(provider_id))
-                if not provider_id:
-                    yield event.plain_result("当前没有可用的 LLM 提供商。"); return
-                from astrbot.core.agent.tool import ToolSet
-                manager = self.context.get_llm_tool_manager()
-                tools = ToolSet()
-                for tool in getattr(manager, "func_list", []):
-                    tools.add_tool(tool)
-                self._debug("ai tool loop: registered_tools=%d", len(getattr(manager, "func_list", [])))
-                response = await self.context.tool_loop_agent(
-                    event=event,
-                    chat_provider_id=provider_id,
-                    prompt=prompt,
-                    tools=tools,
-                    max_steps=10,
-                    tool_call_timeout=60,
-                )
-                text = getattr(response, "completion_text", None) or str(response)
-                self._debug("ai tool loop completed: response_type=%s text_length=%d", type(response).__name__, len(text))
-                yield event.plain_result(text)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("/q ai failed")
-                yield event.plain_result(f"AI 查询失败：{exc}")
-            return
-        yield event.plain_result("无法识别这个选项。\n\n" + self._menu())
+        yield event.plain_result("没有找到对应的菜单操作，请查看下面的选项：\n\n" + self._menu())
 
     @filter.llm_tool(name="resolve_observer_location")
     async def resolve_observer_location(self, event: AstrMessageEvent, location: str) -> MessageEventResult:
@@ -549,12 +560,7 @@ class SatelliteForecastPlugin(Star):
                                 minimum_elevation_degrees=settings.min_elevation_deg)
         if not result:
             return event.plain_result(f"未来 {hours} 小时内没有达到 {settings.min_elevation_deg:g}° 的过境。")
-        return event.plain_result("\n".join(
-            [f"{stored.name}（NORAD {stored.norad_id}）过境："] +
-            [f"AOS {self._time(p.aos, settings.timezone)} | 最大仰角 {p.max_elevation_degrees:.1f}° "
-             f"{self._time(p.max_elevation_time, settings.timezone)} {p.max_azimuth_degrees:.1f}°（{p.max_direction}） | "
-             f"EOS {self._time(p.eos, settings.timezone)}" for p in result[:5]]
-        ))
+        return event.plain_result(self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours))
 
     @filter.llm_tool(name="get_satellite_transmitters")
     async def get_satellite_transmitters(self, event: AstrMessageEvent, satellite: str) -> MessageEventResult:

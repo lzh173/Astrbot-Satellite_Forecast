@@ -4,6 +4,11 @@
       "description": "输出插件详细调试日志（可能包含查询摘要和数据统计，不包含完整提示词）",
       "default": false
     },
+    "command_name": {
+      "type": "string",
+      "description": "菜单命令名称，可填写 X 以使用 /X；/q 始终保留兼容",
+      "default": "q"
+    },
     "sync_on_start": {
       "type": "bool",
       "description": "插件启动时立即同步数据",
