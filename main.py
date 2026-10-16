@@ -19,7 +19,8 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, EventMessageType, MessageEventResult, filter
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
+from astrbot.api.event.filter import EventMessageType
 from astrbot.api.star import Context, Star, register
 try:
     from astrbot.api import AstrBotConfig
