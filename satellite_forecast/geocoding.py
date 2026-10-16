@@ -1,4 +1,4 @@
-"""Location resolution from Maidenhead locators and Nominatim."""
+"""Location resolution from Maidenhead locators and public geocoding APIs."""
 
 from __future__ import annotations
 
@@ -88,10 +88,63 @@ class NominatimGeocoder:
             raise ValueError("Nominatim returned an invalid location") from exc
 
 
-async def resolve_location(query: str, geocoder: NominatimGeocoder | None = None) -> Location:
-    """Resolve a Maidenhead locator locally, otherwise query Nominatim."""
+class OpenMeteoGeocoder:
+    """Keyless geocoder that is generally more reachable from mainland China."""
+
+    def __init__(
+        self,
+        endpoint: str = "https://geocoding-api.open-meteo.com/v1/search",
+        *,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.endpoint = endpoint
+        self.client = client
+
+    async def geocode(self, query: str) -> Location:
+        if not query or not query.strip():
+            raise ValueError("query must not be empty")
+        params = {"name": query.strip(), "count": 1, "language": "zh", "format": "json"}
+        if self.client is None:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(self.endpoint, params=params)
+        else:
+            response = await self.client.get(self.endpoint, params=params)
+        response.raise_for_status()
+        payload = response.json()
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(results, list) or not results:
+            raise LookupError(f"location not found: {query}")
+        result = results[0]
+        try:
+            name = str(result.get("name") or query.strip())
+            admin = ", ".join(str(result[key]) for key in ("admin1", "country") if result.get(key))
+            return Location(
+                latitude=float(result["latitude"]),
+                longitude=float(result["longitude"]),
+                display_name=f"{name}（{admin}）" if admin else name,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Open-Meteo returned an invalid location") from exc
+
+
+async def resolve_location(
+    query: str,
+    geocoder: NominatimGeocoder | OpenMeteoGeocoder | None = None,
+) -> Location:
+    """Resolve a Maidenhead locator locally, then use Open-Meteo and Nominatim."""
 
     normalized = query.strip()
+    if not normalized:
+        raise ValueError("location must not be empty")
     if _MAIDENHEAD.fullmatch(normalized):
         return maidenhead_to_location(normalized)
-    return await (geocoder or NominatimGeocoder()).geocode(normalized)
+    if geocoder is not None:
+        return await geocoder.geocode(normalized)
+
+    errors: list[str] = []
+    for provider in (OpenMeteoGeocoder(), NominatimGeocoder()):
+        try:
+            return await provider.geocode(normalized)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{type(provider).__name__}: {str(exc) or type(exc).__name__}")
+    raise LookupError(f"无法解析位置“{normalized}”；" + "；".join(errors))

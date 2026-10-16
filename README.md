@@ -50,7 +50,8 @@ The included `_conf_schema.json` exposes startup synchronization, the daily sync
 
 - CelesTrak: active satellite TLE data.
 - SatNOGS DB: transmitter records associated with the NORAD catalog ID.
-- OpenStreetMap Nominatim: place-name geocoding when a Maidenhead locator is not supplied.
+- Open-Meteo Geocoding: primary keyless place-name geocoding, including Chinese place names.
+- OpenStreetMap Nominatim: fallback place-name geocoding when Open-Meteo is unavailable.
 
 The source parser interfaces are kept separate so a configured mirror can provide CelesTrak-compatible or SatNOGS-compatible payloads later.
 

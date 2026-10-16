@@ -154,7 +154,6 @@ class SatelliteForecastPlugin(Star):
                 endpoint=celestrak_endpoint,
                 group=source_config.get("group", "active"),
                 format=source_config.get("format", "tle"),
-                headers=source_config.get("headers"),
             ).fetch()
             self._debug("sync: celestrak parsed records=%d", len(records))
             tx_config = self.config.get("satnogs", {})
