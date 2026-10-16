@@ -101,11 +101,15 @@ class Storage:
                 source TEXT NOT NULL,
                 tle_line1 TEXT,
                 tle_line2 TEXT,
+                omm TEXT,
                 transmitters TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             """
         )
+        columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(satellites)")}
+        if "omm" not in columns:
+            self._connection.execute("ALTER TABLE satellites ADD COLUMN omm TEXT")
         self._connection.commit()
 
     def close(self) -> None:
@@ -205,11 +209,7 @@ class Storage:
             ).fetchone()
         if row is None:
             return UserSettings(user_id=user_id)
-        # Settings created before the local-time default was introduced have
-        # UTC persisted even though the user never selected a timezone.
         timezone_name = row["timezone"] or "Asia/Shanghai"
-        if timezone_name == "UTC":
-            timezone_name = "Asia/Shanghai"
         return UserSettings(
             user_id=row["user_id"],
             min_elevation_deg=row["min_elevation_deg"],
@@ -357,11 +357,12 @@ class Storage:
                 """
                 INSERT INTO satellites
                     (norad_id, name, aliases, source, tle_line1, tle_line2,
-                     transmitters, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     omm, transmitters, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(norad_id) DO UPDATE SET
                     name=excluded.name, aliases=excluded.aliases, source=excluded.source,
                     tle_line1=excluded.tle_line1, tle_line2=excluded.tle_line2,
+                    omm=excluded.omm,
                     transmitters=excluded.transmitters, updated_at=excluded.updated_at
                 """,
                 (
@@ -371,6 +372,7 @@ class Storage:
                     satellite.source,
                     satellite.tle_line1,
                     satellite.tle_line2,
+                    json.dumps(satellite.omm, ensure_ascii=True, sort_keys=True) if satellite.omm else None,
                     json.dumps(transmitters, ensure_ascii=True, sort_keys=True),
                     _datetime_to_text(satellite.updated_at),
                 ),
@@ -408,6 +410,7 @@ class Storage:
             source=row["source"],
             tle_line1=row["tle_line1"],
             tle_line2=row["tle_line2"],
+            omm=json.loads(row["omm"]) if row["omm"] else None,
             transmitters=transmitters,
             updated_at=_text_to_datetime(row["updated_at"]),
         )

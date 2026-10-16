@@ -33,6 +33,7 @@ from satellite_forecast.prediction import predict_passes
 from satellite_forecast.satellite_search import SatelliteSearchIndex
 from satellite_forecast.sources import CelesTrakSource, SatNOGSTransponderSource, SatelliteRecord as SourceSatellite
 from satellite_forecast.storage import Storage
+from satellite_forecast.time_utils import format_local_time, timezone_label
 
 
 PLUGIN_NAME = "astrbot_plugin_satellite_forecast"
@@ -130,6 +131,7 @@ class SatelliteForecastPlugin(Star):
         return SourceSatellite(name=item.name, aliases=item.aliases,
                                norad_id=int(item.norad_id) if item.norad_id.isdigit() else None,
                                line1=item.tle_line1, line2=item.tle_line2, source=item.source,
+                               omm=item.omm,
                                transponders=transponders)
 
     @staticmethod
@@ -150,7 +152,8 @@ class SatelliteForecastPlugin(Star):
             for t in item.transponders
         )
         return StoredSatellite(norad_id=str(item.norad_id), name=item.name, aliases=tuple(item.aliases), source=item.source or "celestrak",
-                                tle_line1=item.line1, tle_line2=item.line2, transmitters=transmitters)
+                                tle_line1=item.line1, tle_line2=item.line2, omm=dict(item.omm) if item.omm else None,
+                                transmitters=transmitters)
 
     async def _sync(self) -> str:
         started = time.monotonic()
@@ -254,15 +257,17 @@ class SatelliteForecastPlugin(Star):
 
     @staticmethod
     def _time(value: datetime, timezone_name: str) -> str:
-        try:
-            return value.astimezone(ZoneInfo(timezone_name)).strftime("%m-%d %H:%M:%S")
-        except Exception:  # noqa: BLE001
-            return value.astimezone(timezone.utc).strftime("%m-%d %H:%M:%S UTC")
+        return format_local_time(value, timezone_name)
+
+    @staticmethod
+    def _timezone_label(timezone_name: str) -> str:
+        return timezone_label(timezone_name)
 
     def _format_passes(self, satellite_name: str, norad_id: str, passes, timezone_name: str,
                        hours: int | None = None) -> str:
         """Format a pass list with each orbital milestone clearly labeled."""
         title = f"{satellite_name}（NORAD {norad_id}）过境预报"
+        title += f"\n时间：{self._timezone_label(timezone_name)}"
         if hours is not None:
             title += f"\n预测范围：未来 {hours} 小时"
         lines = [title]

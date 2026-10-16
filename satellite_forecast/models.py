@@ -139,6 +139,7 @@ class SatelliteRecord:
     source: str = ""
     tle_line1: str | None = None
     tle_line2: str | None = None
+    omm: dict[str, Any] | None = None
     transmitters: tuple[SatelliteTransmitter, ...] = ()
     updated_at: datetime = field(default_factory=utc_now)
 

@@ -60,3 +60,21 @@ def test_pending_interaction_expires_and_satellite_catalog_round_trips() -> None
         assert loaded.transmitters[0].uplink_high_hz == 145900000
         assert loaded.transmitters[0].downlink_low_hz == 137100000
 
+
+def test_satellite_catalog_preserves_omm_ephemeris() -> None:
+    satellite = SatelliteRecord(
+        norad_id="43689",
+        name="METOP-C",
+        source="celestrak-gp",
+        omm={
+            "OBJECT_NAME": "METOP-C",
+            "NORAD_CAT_ID": 43689,
+            "EPOCH": "2024-01-01T00:00:00.000Z",
+        },
+    )
+    with Storage() as storage:
+        storage.upsert_satellite(satellite)
+        loaded = storage.get_satellite("43689")
+    assert loaded is not None
+    assert loaded.omm == satellite.omm
+
