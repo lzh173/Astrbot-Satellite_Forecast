@@ -333,7 +333,7 @@ class SatelliteForecastPlugin(Star):
             return text, chart
         except Exception as exc:  # noqa: BLE001
             logger.warning("satellite sky chart unavailable: %s: %s", type(exc).__name__, exc)
-            self._debug("sky chart generation failed", exc_info=True)
+            self._debug("sky chart generation failed: %s: %s", type(exc).__name__, exc)
             return text, None
 
     def _image_result(self, path):
