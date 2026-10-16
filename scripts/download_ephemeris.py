@@ -14,6 +14,8 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import getproxies, proxy_bypass
 
 import httpx
 
@@ -29,6 +31,22 @@ from satellite_forecast.storage import Storage
 
 DEFAULT_CELESTRAK = "https://celestrak.org/NORAD/elements/gp.php"
 DEFAULT_SATNOGS = "https://db.satnogs.org/api/transmitters/"
+
+
+def _system_proxy(url: str) -> str | None:
+    """Return the system proxy for ``url`` without exposing credentials."""
+    parsed = urlsplit(url)
+    if not parsed.hostname or proxy_bypass(parsed.hostname):
+        return None
+    proxies = getproxies()
+    return proxies.get(parsed.scheme) or proxies.get("all")
+
+
+def _proxy_label(proxy: str | None) -> str:
+    if not proxy:
+        return "direct"
+    parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+    return f"{parsed.hostname or '<proxy>'}:{parsed.port or 80}"
 
 
 def _stored_satellite(record, transmitters) -> StoredSatellite:
@@ -65,6 +83,8 @@ async def build_database(
     satnogs_endpoint: str = DEFAULT_SATNOGS,
     skip_transmitters: bool = False,
     timeout: float = 60.0,
+    proxy: str | None = None,
+    use_system_proxy: bool = True,
 ) -> tuple[int, int]:
     """Download sources and atomically create ``output``."""
 
@@ -72,8 +92,10 @@ async def build_database(
         "User-Agent": "AstrBot-Satellite-Forecast-offline-builder/0.1",
         "Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
     }
+    if proxy is None and use_system_proxy:
+        proxy = _system_proxy(celestrak_endpoint) or _system_proxy(satnogs_endpoint)
     async with httpx.AsyncClient(
-        timeout=timeout, headers=headers, follow_redirects=True
+        timeout=timeout, headers=headers, follow_redirects=True, proxy=proxy
     ) as client:
         try:
             records = await CelesTrakSource(
@@ -136,6 +158,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-transmitters", action="store_true", help="只下载星历，不下载转发器")
     parser.add_argument("--timeout", type=float, default=60.0, help="单次 HTTP 请求超时秒数")
     parser.add_argument("--debug", action="store_true", help="失败时输出完整 Python traceback")
+    parser.add_argument("--proxy", help="手动指定代理 URL；默认自动使用系统代理")
+    parser.add_argument("--no-proxy", action="store_true", help="强制直连，忽略系统代理")
     return parser
 
 
@@ -150,6 +174,8 @@ def main() -> int:
             satnogs_endpoint=args.satnogs_endpoint,
             skip_transmitters=args.skip_transmitters,
             timeout=args.timeout,
+            proxy=args.proxy,
+            use_system_proxy=not args.no_proxy,
         ))
     except Exception as exc:  # noqa: BLE001
         message = f"generation failed [{type(exc).__name__}]: {exc!r}"
@@ -157,8 +183,10 @@ def main() -> int:
         if args.debug:
             traceback.print_exc()
         return 1
+    selected_proxy = None if args.no_proxy else (args.proxy or _system_proxy(DEFAULT_CELESTRAK))
     print(f"生成完成：{args.output.resolve()}")
     print(f"星历：{satellites} 条；转发器：{transmitters} 条")
+    print(f"网络：{_proxy_label(selected_proxy)}")
     return 0
 
 
