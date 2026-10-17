@@ -61,6 +61,17 @@ def _transmitter_lines(transmitters) -> list[str]:
     return lines
 
 
+def _fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
+    """Truncate by rendered width so CJK and Latin text cannot overlap columns."""
+    text = str(text)
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    suffix = "…"
+    while text and draw.textlength(text + suffix, font=font) > max_width:
+        text = text[:-1]
+    return text + suffix if text else suffix
+
+
 def _font(size: int):
     try:
         return ImageFont.truetype("msyh.ttc", size)
@@ -125,7 +136,8 @@ def render_sky_chart(satellite_name: str, track: list[TrackPoint], *, timezone_l
                            fill="#172632", outline="#405466", width=2)
     draw.text((panel_left + 24, panel_top + 22), "收发器 / 转发器",
               fill="#f4f7f9", font=_font(24))
-    columns = (("类型", 24, 16), ("模式", 185, 12), ("下行", 275, 14), ("上行", 375, 14), ("状态", 455, 12))
+    columns = (("类型", 24, 16), ("模式", 165, 12), ("下行", 250, 14), ("上行", 350, 14), ("状态", 430, 11))
+    column_widths = (130, 72, 92, 72, 58)
     header_y = panel_top + 106
     draw.line((panel_left + 20, header_y + 28, panel_right - 20, header_y + 28), fill="#405466", width=1)
     for label, offset, size in columns:
@@ -137,7 +149,9 @@ def render_sky_chart(satellite_name: str, track: list[TrackPoint], *, timezone_l
         draw.line((panel_left + 20, row_y + 28, panel_right - 20, row_y + 28), fill="#2b414f", width=1)
         for column_index, (_, offset, size) in enumerate(columns):
             value = fields[column_index] if column_index < len(fields) else "-"
-            draw.text((panel_left + offset, row_y), value[:18], fill="#dbe9f4", font=_font(size))
+            font = _font(size)
+            value = _fit_text(draw, value, font, column_widths[column_index])
+            draw.text((panel_left + offset, row_y), value, fill="#dbe9f4", font=font)
     if not tx_lines:
         draw.text((panel_left + 24, header_y + 48), "暂无可用收发器数据",
                   fill="#9fb3c8", font=_font(17))
