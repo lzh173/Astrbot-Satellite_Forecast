@@ -34,20 +34,30 @@ def _frequency(value: float | None) -> str:
     return f"{value:g} Hz"
 
 
+def _frequency_range(low: float | None, high: float | None) -> str:
+    first = _frequency(low)
+    if high is not None and low is not None and float(high) != float(low):
+        return f"{first}-{_frequency(high)}"
+    return first
+
+
 def _transmitter_lines(transmitters) -> list[str]:
     selected = sorted(transmitters or (), key=_transmitter_priority)
     lines = []
-    for item in selected[:5]:
+    for item in selected[:12]:
         label = (getattr(item, "description", "") or getattr(item, "mode", "") or "未命名").strip()
         mode = (getattr(item, "mode", "") or "未知").strip()
-        downlink = _frequency(getattr(item, "downlink_low_hz", None))
+        downlink = _frequency_range(getattr(item, "downlink_low_hz", None),
+                                    getattr(item, "downlink_high_hz", None))
         if downlink == "-":
             downlink = (getattr(item, "downlink", "") or "-").strip()
-        uplink = _frequency(getattr(item, "uplink_low_hz", None))
+        uplink = _frequency_range(getattr(item, "uplink_low_hz", None),
+                                  getattr(item, "uplink_high_hz", None))
         if uplink == "-":
             uplink = (getattr(item, "uplink", "") or "-").strip()
         status = (getattr(item, "status", "") or "未知").strip()
-        lines.append(f"{label[:22]} | {mode[:10]} | 下行 {downlink} | 上行 {uplink} | {status[:8]}")
+        lines.append(f"{label[:14]} | {mode[:8]} | {downlink.replace(' MHz', 'M').replace(' kHz', 'k')} | "
+                     f"{uplink.replace(' MHz', 'M').replace(' kHz', 'k')} | {status[:7]}")
     return lines
 
 
@@ -115,9 +125,7 @@ def render_sky_chart(satellite_name: str, track: list[TrackPoint], *, timezone_l
                            fill="#172632", outline="#405466", width=2)
     draw.text((panel_left + 24, panel_top + 22), "收发器 / 转发器",
               fill="#f4f7f9", font=_font(24))
-    draw.text((panel_left + 24, panel_top + 58), "优先显示 SSTV、AHRPT、LRPT、HRPT 和转发器",
-              fill="#9fb3c8", font=_font(14))
-    columns = (("类型", 24, 18), ("模式", 170, 12), ("下行", 250, 16), ("上行", 350, 16), ("状态", 430, 12))
+    columns = (("类型", 24, 16), ("模式", 185, 12), ("下行", 275, 14), ("上行", 375, 14), ("状态", 455, 12))
     header_y = panel_top + 106
     draw.line((panel_left + 20, header_y + 28, panel_right - 20, header_y + 28), fill="#405466", width=1)
     for label, offset, size in columns:
@@ -129,7 +137,7 @@ def render_sky_chart(satellite_name: str, track: list[TrackPoint], *, timezone_l
         draw.line((panel_left + 20, row_y + 28, panel_right - 20, row_y + 28), fill="#2b414f", width=1)
         for column_index, (_, offset, size) in enumerate(columns):
             value = fields[column_index] if column_index < len(fields) else "-"
-            draw.text((panel_left + offset, row_y), value[:20], fill="#dbe9f4", font=_font(size))
+            draw.text((panel_left + offset, row_y), value[:18], fill="#dbe9f4", font=_font(size))
     if not tx_lines:
         draw.text((panel_left + 24, header_y + 48), "暂无可用收发器数据",
                   fill="#9fb3c8", font=_font(17))

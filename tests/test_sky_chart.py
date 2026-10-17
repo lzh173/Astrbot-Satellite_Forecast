@@ -13,7 +13,7 @@ def test_chart_prioritizes_useful_transmitter_modes_and_formats_frequencies():
     lines = _transmitter_lines(items)
 
     assert lines[0].startswith("SSTV | V")
-    assert "下行 145.8 MHz" in lines[0]
-    assert "上行 435 MHz" in lines[0]
+    assert "145.8M" in lines[0]
+    assert "435M" in lines[0]
     assert lines[1].startswith("LRPT | AHRPT")
     assert _frequency(137_100_000) == "137.1 MHz"

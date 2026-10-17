@@ -218,7 +218,7 @@ git diff --check
 
 ## 版本与许可证
 
-当前正式版：`v1.1.0`。
+当前正式版：`v1.1.1`。
 
 作者：lzh173
 仓库：[github.com/lzh173/Astrbot-Satellite_Forecast](https://github.com/lzh173/Astrbot-Satellite_Forecast)
