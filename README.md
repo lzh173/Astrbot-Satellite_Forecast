@@ -10,6 +10,7 @@ AstrBot 的卫星过境预报插件。它同步 CelesTrak 星历和 SatNOGS 转�
 - 每个平台用户独立保存观测位置和关注卫星，私聊与群聊共用同一份用户数据。
 - 查询 AOS、EOS、最高仰角、最高点时间和方位。
 - 查询过境时生成天空轨迹图，并在图片中显示卫星名称、NORAD 编号、AOS、EOS、最高仰角和最高点时间。
+- 天空轨迹图优先显示 SSTV、AHRPT、LRPT、HRPT、转发器等有用的收发器信息，包括上下行频率和状态。
 - 支持 GEO 卫星的窗口边界可见性兜底处理。
 - 支持 AstrBot LLM 工具，可以直接用自然语言查询。
 - 支持联网同步，也支持在联网机器下载源文件后离线生成 SQLite 数据库。
@@ -216,7 +217,7 @@ git diff --check
 
 ## 版本与许可证
 
-当前正式版：`v1.0.1`。
+当前正式版：`v1.0.2`。
 
 作者：lzh173
 仓库：[github.com/lzh173/Astrbot-Satellite_Forecast](https://github.com/lzh173/Astrbot-Satellite_Forecast)

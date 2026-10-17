@@ -55,7 +55,7 @@ def _endpoint_label(endpoint: object) -> str:
         return "<invalid-endpoint>"
 
 
-@register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "1.0.1")
+@register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "1.0.2")
 class SatelliteForecastPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -331,6 +331,7 @@ class SatelliteForecastPlugin(Star):
                 "output_dir": chart_dir,
                 "norad_id": stored.norad_id,
                 "prediction": passes[0],
+                "transmitters": stored.transmitters,
                 "format_time": lambda value: self._time(value, settings.timezone),
             }
             try:
