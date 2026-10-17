@@ -55,7 +55,7 @@ def _endpoint_label(endpoint: object) -> str:
         return "<invalid-endpoint>"
 
 
-@register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "1.0.2")
+@register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "1.1.0")
 class SatelliteForecastPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -72,6 +72,8 @@ class SatelliteForecastPlugin(Star):
         # at the prediction boundary; their transmitter field names differ.
         self.index = SatelliteSearchIndex(self.storage.list_satellites())
         self._sync_task: asyncio.Task | None = None
+        self._reminder_task: asyncio.Task | None = None
+        self._reminded_passes: dict[tuple[str, str, str], datetime] = {}
         self._debug("constructed: data_dir=%s catalog_size=%d", data_dir, len(self.index.all()))
 
     def _command(self) -> str:
@@ -87,12 +89,16 @@ class SatelliteForecastPlugin(Star):
                     self.config.get("sync_interval_hours", 24))
         logger.info("Satellite Forecast plugin initialized (debug_logging=%s)", self.debug_enabled)
         self._sync_task = asyncio.create_task(self._sync_loop())
+        self._reminder_task = asyncio.create_task(self._reminder_loop())
 
     async def terminate(self):
         self._debug("terminate: sync_task_exists=%s", self._sync_task is not None)
         if self._sync_task is not None:
             self._sync_task.cancel()
             await asyncio.gather(self._sync_task, return_exceptions=True)
+        if self._reminder_task is not None:
+            self._reminder_task.cancel()
+            await asyncio.gather(self._reminder_task, return_exceptions=True)
         self.storage.close()
         self._debug("terminate: storage closed")
 
@@ -114,6 +120,70 @@ class SatelliteForecastPlugin(Star):
         key = f"{event.get_platform_name() or 'unknown'}:{user_id}"
         self._debug("resolved user key: platform=%s user_id_present=%s", event.get_platform_name() or "unknown", bool(user_id))
         return key
+
+    @staticmethod
+    def _event_origin(event: AstrMessageEvent) -> str | None:
+        origin = getattr(event, "unified_msg_origin", None)
+        if callable(origin):
+            origin = origin()
+        return str(origin) if origin else None
+
+    async def _reminder_loop(self):
+        while True:
+            try:
+                await self._check_reminders()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("satellite reminder check failed")
+            await asyncio.sleep(60)
+
+    async def _check_reminders(self):
+        now = datetime.now(timezone.utc)
+        for user_id, origin in self.storage.list_notification_targets():
+            settings = self.storage.get_settings(user_id)
+            if not settings.notifications_enabled or settings.reminder_count <= 0:
+                continue
+            location_row = self.storage.get_location(user_id)
+            if location_row is None:
+                continue
+            location = Location(location_row.latitude, location_row.longitude, location_row.name, location_row.altitude_m)
+            for followed in self.storage.list_followed_satellites(user_id):
+                stored = self.storage.get_satellite(followed.norad_id)
+                if stored is None:
+                    continue
+                passes = predict_passes(self._to_source(stored), location, start=now,
+                                        duration=timedelta(hours=2),
+                                        minimum_elevation_degrees=settings.min_elevation_deg)
+                for item in passes:
+                    key = (user_id, stored.norad_id, item.aos.isoformat())
+                    remaining = (item.aos - now).total_seconds() / 60
+                    if 0 <= remaining <= settings.reminder_minutes and key not in self._reminded_passes:
+                        await self._send_reminder(origin, user_id, stored, location, settings, item)
+                        self._reminded_passes[key] = now
+        cutoff = now - timedelta(days=2)
+        self._reminded_passes = {key: value for key, value in self._reminded_passes.items() if value >= cutoff}
+
+    async def _send_reminder(self, origin, user_id, stored, location, settings, prediction):
+        text = self._format_passes(stored.name, stored.norad_id, [prediction], settings.timezone,
+                                   is_geo=is_geostationary(self._to_source(stored)), hours=None)
+        chart = None
+        try:
+            from satellite_forecast.prediction import sample_pass_track
+            from satellite_forecast.sky_chart import render_sky_chart
+            chart = render_sky_chart(stored.name, sample_pass_track(self._to_source(stored), location, prediction),
+                                     timezone_label=self._timezone_label(settings.timezone),
+                                     output_dir=Path(self.config.get("data_dir", "data/plugin_data/astrbot_plugin_satellite_forecast")) / "charts",
+                                     norad_id=stored.norad_id, prediction=prediction,
+                                     transmitters=stored.transmitters,
+                                     format_time=lambda value: self._time(value, settings.timezone))
+        except Exception as exc:
+            logger.warning("satellite reminder chart unavailable: %s: %s", type(exc).__name__, exc)
+        chain = self._pass_result(text, chart)
+        if chain is None:
+            from astrbot.api.message_components import Plain
+            chain = [Plain(text)]
+        await self.context.send_message(origin, chain)
 
     @staticmethod
     def _to_source(item: StoredSatellite) -> SourceSatellite:
@@ -420,6 +490,9 @@ class SatelliteForecastPlugin(Star):
     async def _command_handler(self, event: AstrMessageEvent):
         """卫星预报菜单入口。"""
         argument = _command_argument(event.message_str, self.command_name)
+        origin = self._event_origin(event)
+        if origin:
+            self.storage.set_notification_target(self._user_key(event), origin)
         self._debug("command received: argument=%s", argument[:120] if argument else "<menu>")
         if not argument:
             yield event.plain_result(self._menu()); return

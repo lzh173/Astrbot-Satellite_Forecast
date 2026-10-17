@@ -105,6 +105,11 @@ class Storage:
                 transmitters TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS notification_targets (
+                user_id TEXT PRIMARY KEY,
+                origin TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(satellites)")}
@@ -115,6 +120,20 @@ class Storage:
     def close(self) -> None:
         with self._lock:
             self._connection.close()
+
+    def set_notification_target(self, user_id: str, origin: str) -> None:
+        with self._lock:
+            self._connection.execute(
+                "INSERT INTO notification_targets(user_id, origin, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET origin=excluded.origin, updated_at=excluded.updated_at",
+                (user_id, origin, _datetime_to_text(utc_now())),
+            )
+            self._connection.commit()
+
+    def list_notification_targets(self) -> list[tuple[str, str]]:
+        with self._lock:
+            rows = self._connection.execute("SELECT user_id, origin FROM notification_targets").fetchall()
+        return [(row["user_id"], row["origin"]) for row in rows]
 
     def catalog_stats(self) -> tuple[int, int, datetime | None]:
         """Return satellite count, transmitter count, and newest catalog time."""

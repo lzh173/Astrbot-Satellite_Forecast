@@ -78,3 +78,9 @@ def test_satellite_catalog_preserves_omm_ephemeris() -> None:
     assert loaded is not None
     assert loaded.omm == satellite.omm
 
+
+def test_notification_target_round_trip() -> None:
+    with Storage() as storage:
+        storage.set_notification_target("qq:123", "GroupMessage:456")
+        assert storage.list_notification_targets() == [("qq:123", "GroupMessage:456")]
+
