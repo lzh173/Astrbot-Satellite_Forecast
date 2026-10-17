@@ -80,7 +80,7 @@ python -m pip install -r requirements.txt
 | `/sat 1 厦门` | 设置观测位置。也支持 `OL63` 或经纬度可识别的地点。 |
 | `/sat 2` | 查看关注卫星列表。 |
 | `/sat 2 METOP-C` | 查询指定卫星的过境和天空图。 |
-| `/sat 3` | 查看提醒参数。 |
+| `/sat 3` | 查看提醒状态、参数和可执行修改命令。 |
 | `/sat 4` | 查看位置、关注卫星和下一次过境摘要。 |
 | `/sat 5 METOP` | 模糊搜索卫星。 |
 | `/sat 6` | 手动更新星历和转发器数据。 |
@@ -90,6 +90,7 @@ python -m pip install -r requirements.txt
 | `/sat set elevation 10` | 设置最低过境仰角，单位为度。 |
 | `/sat set before 6` | 设置提醒提前分钟数。 |
 | `/sat set repeat 1` | 设置提醒次数。 |
+| `/sat set notify on` | 开启提醒参数；`off` 可关闭。 |
 
 卫星搜索支持名称、常用缩写、国际设计代号和 NORAD 编号。默认展示北京时间（UTC+8）；代码内部使用 UTC 计算，用户时区显示以保存设置为准。
 
@@ -215,7 +216,7 @@ git diff --check
 
 ## 版本与许可证
 
-当前正式版：`v1.0.0`。
+当前正式版：`v1.0.1`。
 
 作者：lzh173
 仓库：[github.com/lzh173/Astrbot-Satellite_Forecast](https://github.com/lzh173/Astrbot-Satellite_Forecast)

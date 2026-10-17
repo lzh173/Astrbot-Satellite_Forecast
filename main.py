@@ -55,7 +55,7 @@ def _endpoint_label(endpoint: object) -> str:
         return "<invalid-endpoint>"
 
 
-@register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "1.0.0")
+@register(PLUGIN_NAME, "lzh173", "查询卫星星历、转发器信息和可见过境，支持用户位置绑定。", "1.0.1")
 class SatelliteForecastPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -476,15 +476,37 @@ class SatelliteForecastPlugin(Star):
             yield event.plain_result("已从关注列表移除。" if removed else "这颗卫星不在你的关注列表中。"); return
         if argument == "3":
             settings = self.storage.get_settings(self._user_key(event))
-            yield event.plain_result(f"提醒设置：最低仰角 {settings.min_elevation_deg:g}°，提前 {settings.reminder_minutes} 分钟，提醒 {settings.reminder_count} 次。\n"
-                                     f"修改示例：{self._command()} set elevation 10"); return
+            enabled = "已开启" if settings.notifications_enabled else "已关闭"
+            yield event.plain_result(
+                "提醒设置\n"
+                f"状态：{enabled}\n"
+                f"最低仰角：{settings.min_elevation_deg:g}°（低于此角度不提醒）\n"
+                f"提前时间：{settings.reminder_minutes} 分钟\n"
+                f"提醒次数：{settings.reminder_count} 次\n\n"
+                "可直接发送以下命令修改：\n"
+                f"{self._command()} set elevation 10  设置最低仰角\n"
+                f"{self._command()} set before 6      设置提前分钟数\n"
+                f"{self._command()} set repeat 1      设置提醒次数\n"
+                f"{self._command()} set notify on     开启提醒参数\n"
+                f"{self._command()} set notify off    关闭提醒参数\n\n"
+                "说明：当前版本保存提醒参数，主动推送调度仍在接入中。"
+            ); return
         if argument.startswith("set "):
             parts = argument.split()
-            if len(parts) != 3 or parts[1] not in {"elevation", "before", "repeat"}:
-                yield event.plain_result(f"用法示例：\n{self._command()} set elevation 10\n{self._command()} set before 6\n{self._command()} set repeat 1"); return
+            if len(parts) != 3 or parts[1] not in {"elevation", "before", "repeat", "notify"}:
+                yield event.plain_result(f"用法示例：\n{self._command()} set elevation 10\n{self._command()} set before 6\n{self._command()} set repeat 1\n{self._command()} set notify on"); return
             try:
                 key = self._user_key(event)
                 old = self.storage.get_settings(key)
+                if parts[1] == "notify":
+                    if parts[2].lower() not in {"on", "off"}:
+                        raise ValueError("notify must be on or off")
+                    settings = UserSettings(key, old.min_elevation_deg, old.reminder_minutes,
+                                            old.reminder_count, parts[2].lower() == "on",
+                                            old.tle_storage_path, old.timezone)
+                    self.storage.set_settings(settings)
+                    yield event.plain_result(f"提醒参数已{'开启' if settings.notifications_enabled else '关闭'}。发送 {self._command()} 3 查看。")
+                    return
                 value = float(parts[2]) if parts[1] == "elevation" else int(parts[2])
                 settings = UserSettings(key, value if parts[1] == "elevation" else old.min_elevation_deg,
                                         value if parts[1] == "before" else old.reminder_minutes,
