@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - older AstrBot versions
 
 from satellite_forecast.geocoding import Location, resolve_location
 from satellite_forecast.models import FollowedSatellite, PendingInteraction, SatelliteRecord as StoredSatellite, SatelliteTransmitter, UserLocation, UserSettings, utc_now
-from satellite_forecast.prediction import predict_passes
+from satellite_forecast.prediction import is_geostationary, predict_passes
 from satellite_forecast.satellite_search import SatelliteSearchIndex
 from satellite_forecast.sources import CelesTrakSource, SatNOGSTransponderSource, SatelliteRecord as SourceSatellite
 from satellite_forecast.storage import Storage
@@ -264,12 +264,14 @@ class SatelliteForecastPlugin(Star):
         return timezone_label(timezone_name)
 
     def _format_passes(self, satellite_name: str, norad_id: str, passes, timezone_name: str,
-                       hours: int | None = None) -> str:
+                       hours: int | None = None, *, is_geo: bool = False) -> str:
         """Format a pass list with each orbital milestone clearly labeled."""
         title = f"{satellite_name}（NORAD {norad_id}）过境预报"
         title += f"\n时间：{self._timezone_label(timezone_name)}"
         if hours is not None:
             title += f"\n预测范围：未来 {hours} 小时"
+        if is_geo:
+            title += "\n类型：GEO 地球静止轨道（AOS/EOS 可能是预测窗口边界）"
         lines = [title]
         for index, item in enumerate(passes[:5], 1):
             lines.extend((
@@ -298,7 +300,8 @@ class SatelliteForecastPlugin(Star):
                     len(result), settings.min_elevation_deg)
         if not result:
             return f"未来 {hours} 小时内没有达到 {settings.min_elevation_deg:g}° 的过境。"
-        return self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours)
+        return self._format_passes(stored.name, stored.norad_id, result, settings.timezone, hours,
+                                   is_geo=is_geostationary(self._to_source(stored)))
 
     async def _passes_with_chart(self, event: AstrMessageEvent, query: str, hours: int = 24):
         """Return the text forecast and a best-effort chart for command replies."""
@@ -371,6 +374,19 @@ class SatelliteForecastPlugin(Star):
             logger.warning("satellite sky chart message chain unavailable: %s: %s", type(exc).__name__, exc)
             return None
 
+    @staticmethod
+    def _parse_pass_query(value: str) -> tuple[str, int]:
+        """Parse a satellite query with an optional forecast duration."""
+        parts = value.split()
+        hours = 24
+        if parts and re.fullmatch(r"\d+", parts[-1]):
+            hours = int(parts.pop())
+        if not parts:
+            raise ValueError("请填写卫星名称")
+        if not 1 <= hours <= 168:
+            raise ValueError("预测小时数必须在 1 到 168 之间")
+        return " ".join(parts), hours
+
     def _menu(self) -> str:
         command = self._command()
         return ("卫星过境助手\n"
@@ -382,7 +398,8 @@ class SatelliteForecastPlugin(Star):
                 "5. 搜索卫星\n"
                 "6. 更新星历数据\n"
                 f"常用命令：{command} 1 厦门｜{command} add METOP-C｜{command} 2 METOP-C\n"
-                "也可以直接问：Metop-C 明天在 OL63 有哪些过境？")
+                "也可以直接问：Metop-C 明天在 OL63 有哪些过境？\n"
+                f"预测时长可写在末尾，例如：{command} pass METOP-C 48")
 
     @filter.event_message_type(EventMessageType.ALL)
     async def configured_command(self, event: AstrMessageEvent):
@@ -479,7 +496,11 @@ class SatelliteForecastPlugin(Star):
                 self._debug("settings command failed: %s", type(exc).__name__)
                 yield event.plain_result("设置无效，请填写数字。\n例如：" + f"{self._command()} set elevation 10"); return
         if argument.startswith("pass "):
-            text, chart = await self._passes_with_chart(event, argument[5:].strip())
+            try:
+                query, hours = self._parse_pass_query(argument[5:].strip())
+            except ValueError as exc:
+                yield event.plain_result(str(exc)); return
+            text, chart = await self._passes_with_chart(event, query, hours)
             chain = self._pass_result(text, chart)
             yield event.chain_result(chain) if chain else event.plain_result(text)
             return
@@ -496,9 +517,18 @@ class SatelliteForecastPlugin(Star):
                 "\n".join(f"{i}. {x.satellite.name}（NORAD {x.satellite.norad_id}）" for i, x in enumerate(results, 1)))
             return
         if argument.startswith("2 "):
-            text, chart = await self._passes_with_chart(event, argument[2:].strip())
+            try:
+                query, hours = self._parse_pass_query(argument[2:].strip())
+            except ValueError as exc:
+                yield event.plain_result(str(exc)); return
+            text, chart = await self._passes_with_chart(event, query, hours)
             chain = self._pass_result(text, chart)
             yield event.chain_result(chain) if chain else event.plain_result(text)
+            return
+        if argument == "status":
+            satellites, transmitters, updated = self.storage.catalog_stats()
+            updated_text = self._time(updated, "Asia/Shanghai") if updated else "暂无"
+            yield event.plain_result(f"数据状态：\n星历卫星：{satellites} 条\n转发器记录：{transmitters} 条\n最近更新：{updated_text}（北京时间）")
             return
         if argument in {"2", "4"}:
             followed = self.storage.list_followed_satellites(self._user_key(event))

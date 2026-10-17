@@ -116,6 +116,17 @@ class Storage:
         with self._lock:
             self._connection.close()
 
+    def catalog_stats(self) -> tuple[int, int, datetime | None]:
+        """Return satellite count, transmitter count, and newest catalog time."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS satellites, "
+                "COALESCE(SUM(json_array_length(transmitters)), 0) AS transmitters, "
+                "MAX(updated_at) AS updated_at FROM satellites"
+            ).fetchone()
+        updated = _text_to_datetime(row["updated_at"]) if row["updated_at"] else None
+        return int(row["satellites"]), int(row["transmitters"]), updated
+
     def __enter__(self) -> "Storage":
         return self
 

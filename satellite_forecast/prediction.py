@@ -77,6 +77,11 @@ def _is_geostationary(record: SatelliteRecord) -> bool:
         return False
 
 
+def is_geostationary(record: SatelliteRecord) -> bool:
+    """Return whether a satellite is close to geostationary mean motion."""
+    return _is_geostationary(record)
+
+
 def _sample_boundary_pass(
     satellite: EarthSatellite,
     observer: Any,
