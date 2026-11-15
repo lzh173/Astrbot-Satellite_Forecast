@@ -219,6 +219,7 @@ git diff --check
 ## 版本与许可证
 
 当前正式版：`v1.1.1`。
+由于主要贡献者qq账号被封禁以及当前主流框架NapCat等被DMCA，本仓库可能不再更新
 
 作者：lzh173
 仓库：[github.com/lzh173/Astrbot-Satellite_Forecast](https://github.com/lzh173/Astrbot-Satellite_Forecast)
